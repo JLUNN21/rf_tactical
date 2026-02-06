@@ -1,0 +1,15 @@
+ui_settings:
+  waterfall_history: 200
+  fft_update_fps: 30
+  touch_target_min_px: 44
+  display_width: 800
+  display_height: 480
+  fullscreen: true
+  hide_cursor: true
+
+atak_settings:
+  cot_multicast_group: "239.2.3.1"
+  cot_multicast_port: 6969
+  cot_stale_seconds: 300
+  cot_type: "a-f-G-U"
+  cot_uid_prefix: "rf-tactical"

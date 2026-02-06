@@ -1,0 +1,60 @@
+bands:
+  adsb:
+    name: "ADS-B"
+    center_freq_hz: 1090000000
+    bandwidth_hz: 2000000
+    sample_rate_hz: 2000000
+    fft_size: 1024
+    gain_lna: 32
+    gain_vga: 40
+    decoder_type: "adsb"
+    color_hex: "#80E0FF"
+    description: "ADS-B aircraft transponder signals at 1090 MHz"
+
+  ism_433:
+    name: "ISM-433"
+    center_freq_hz: 433920000
+    bandwidth_hz: 1000000
+    sample_rate_hz: 2000000
+    fft_size: 1024
+    gain_lna: 32
+    gain_vga: 40
+    decoder_type: "ism"
+    color_hex: "#00FF41"
+    description: "ISM band 433.92 MHz — weather stations, remotes, sensors"
+
+  ism_915:
+    name: "ISM-915"
+    center_freq_hz: 915000000
+    bandwidth_hz: 1000000
+    sample_rate_hz: 2000000
+    fft_size: 1024
+    gain_lna: 32
+    gain_vga: 40
+    decoder_type: "ism"
+    color_hex: "#00CC33"
+    description: "ISM band 915 MHz — LoRa, Meshtastic, industrial sensors"
+
+  wifi:
+    name: "WiFi"
+    center_freq_hz: 2437000000
+    bandwidth_hz: 20000000
+    sample_rate_hz: 20000000
+    fft_size: 2048
+    gain_lna: 32
+    gain_vga: 40
+    decoder_type: "wifi"
+    color_hex: "#FFB000"
+    description: "Wi-Fi 2.4 GHz channel 6 center frequency"
+
+  cellular_lte:
+    name: "Cellular-LTE"
+    center_freq_hz: 1842500000
+    bandwidth_hz: 20000000
+    sample_rate_hz: 20000000
+    fft_size: 2048
+    gain_lna: 32
+    gain_vga: 40
+    decoder_type: "cellular"
+    color_hex: "#FF8C00"
+    description: "LTE Band 3 downlink — 1842.5 MHz center"
