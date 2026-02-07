@@ -4,11 +4,17 @@ Connects to HackRF via SoapySDR, reads IQ samples, computes FFT,
 and emits waterfall rows via Qt signals.
 """
 
+import time
 import numpy as np
 import SoapySDR
-from SoapySDR import SOAPY_SDR_RX, SOAPY_SDR_CF32
+from SoapySDR import SOAPY_SDR_RX, SOAPY_SDR_CF32, SOAPY_SDR_OVERFLOW
 
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QMutex, QMutexLocker
+
+from radio.iq_recorder import IQRecorder
+from utils.signal_detector import SignalDetector
+
+from utils.logger import setup_logger
 
 
 class SDRWorker(QObject):
@@ -33,6 +39,10 @@ class SDRWorker(QObject):
     error_occurred = pyqtSignal(str)
     device_connected = pyqtSignal(str)
     device_disconnected = pyqtSignal()
+    connection_status = pyqtSignal(str, float)
+    recording_status = pyqtSignal(object)
+    overflow_count_updated = pyqtSignal(int)
+    signal_detected = pyqtSignal(dict)
 
     def __init__(
         self,
@@ -61,13 +71,21 @@ class SDRWorker(QObject):
         self._window = np.hanning(self._fft_size).astype(np.float32)
         self._iq_buffer = np.zeros(self._fft_size, dtype=np.complex64)
         self._power_accum = np.zeros(self._fft_size, dtype=np.float64)
+        self._overflow_count = 0
+        self._recorder = IQRecorder()
+        self._last_record_status = 0.0
+        self._signal_detector = SignalDetector(sample_rate=self._sample_rate)
+        self._samples_processed = 0
+        self._logger = setup_logger(__name__)
 
     def _open_device(self) -> bool:
         """Open HackRF via SoapySDR and configure parameters."""
         try:
             results = SoapySDR.Device.enumerate("driver=hackrf")
             if len(results) == 0:
+                self._logger.error("HackRF not found")
                 self.error_occurred.emit("HackRF not found — no SoapySDR devices detected")
+                self.connection_status.emit("DISCONNECTED", 0.0)
                 return False
 
             self._sdr = SoapySDR.Device(dict(driver="hackrf"))
@@ -88,10 +106,13 @@ class SDRWorker(QObject):
                 f"LNA={self._gain_lna} VGA={self._gain_vga}"
             )
             self.device_connected.emit(info_str)
+            self.connection_status.emit("IDLE", self._sample_rate)
             return True
 
         except Exception as exc:
+            self._logger.exception("HackRF open failed")
             self.error_occurred.emit(f"HackRF open failed: {exc}")
+            self.connection_status.emit("ERROR", 0.0)
             self._sdr = None
             self._stream = None
             return False
@@ -103,6 +124,7 @@ class SDRWorker(QObject):
                 self._sdr.deactivateStream(self._stream)
                 self._sdr.closeStream(self._stream)
             except Exception:
+                self._logger.exception("SDR stream close failed")
                 pass
             self._stream = None
 
@@ -113,6 +135,7 @@ class SDRWorker(QObject):
                 pass
 
         self.device_disconnected.emit()
+        self.connection_status.emit("DISCONNECTED", 0.0)
 
     def _read_iq_block(self) -> bool:
         """Read one FFT-sized block of IQ samples into the buffer.
@@ -134,6 +157,11 @@ class SDRWorker(QObject):
             ret_code = sr.ret
 
             if ret_code < 0:
+                if ret_code == SOAPY_SDR_OVERFLOW:
+                    self._overflow_count += 1
+                    self.overflow_count_updated.emit(self._overflow_count)
+                    continue
+                self._logger.error("readStream error: %s", SoapySDR.errToStr(ret_code))
                 self.error_occurred.emit(f"readStream error: {SoapySDR.errToStr(ret_code)}")
                 return False
 
@@ -141,6 +169,30 @@ class SDRWorker(QObject):
                 continue
 
             offset += ret_code
+
+        if self._recorder.recording:
+            valid_samples = self._iq_buffer[:offset].copy()
+            self._recorder.write_samples(valid_samples)
+            detected = self._signal_detector.process_samples(valid_samples)
+            if detected:
+                for sig in detected:
+                    timestamp = self._samples_processed / self._sample_rate
+                    freq_hz = self._center_freq + sig["center_freq_offset_hz"]
+                    self._recorder.mark_signal_event(
+                        freq_hz=freq_hz,
+                        power_dbm=sig["peak_power_dbm"],
+                        duration_sec=sig["duration_sec"],
+                    )
+                    self.signal_detected.emit(
+                        {
+                            "timestamp": timestamp,
+                            "frequency": freq_hz,
+                            "power": sig["peak_power_dbm"],
+                            "duration": sig["duration_sec"],
+                        }
+                    )
+
+        self._samples_processed += offset
 
         return True
 
@@ -163,6 +215,10 @@ class SDRWorker(QObject):
             with QMutexLocker(self._mutex):
                 self._running = False
             return
+
+        self.recording_status.emit(self._recorder.get_recording_status())
+        self.connection_status.emit("ACTIVE", self._sample_rate)
+        self._samples_processed = 0
 
         while True:
             with QMutexLocker(self._mutex):
@@ -191,13 +247,35 @@ class SDRWorker(QObject):
             magnitude_db = 10.0 * np.log10(avg_power + 1e-10)
             self.new_waterfall_row.emit(magnitude_db.astype(np.float32))
 
+            now = time.time()
+            if now - self._last_record_status >= 0.5:
+                self._last_record_status = now
+                self.recording_status.emit(self._recorder.get_recording_status())
+
         self._close_device()
+        self.recording_status.emit(self._recorder.get_recording_status())
 
     @pyqtSlot()
     def stop_capture(self):
         """Signal the capture loop to stop."""
         with QMutexLocker(self._mutex):
             self._running = False
+        self.recording_status.emit(self._recorder.get_recording_status())
+
+    def start_recording(self, center_freq, sample_rate, gain_lna, gain_vga):
+        """Start IQ recording."""
+        self._recorder.start_recording(center_freq, sample_rate, gain_lna, gain_vga)
+        self.recording_status.emit(self._recorder.get_recording_status())
+
+    def stop_recording(self):
+        """Stop IQ recording."""
+        paths = self._recorder.stop_recording()
+        self.recording_status.emit(self._recorder.get_recording_status())
+        return paths
+
+    def mark_signal(self, freq_hz, power_dbm, duration_sec):
+        """Mark a signal event during recording."""
+        self._recorder.mark_signal_event(freq_hz, power_dbm, duration_sec)
 
     @pyqtSlot(float, float)
     def retune(self, center_freq: float, sample_rate: float):
@@ -210,12 +288,14 @@ class SDRWorker(QObject):
         with QMutexLocker(self._mutex):
             self._center_freq = center_freq
             self._sample_rate = sample_rate
+            self._signal_detector.set_sample_rate(sample_rate)
 
         if self._sdr is not None:
             try:
                 self._sdr.setFrequency(SOAPY_SDR_RX, 0, center_freq)
                 self._sdr.setSampleRate(SOAPY_SDR_RX, 0, sample_rate)
             except Exception as exc:
+                self._logger.exception("Retune failed")
                 self.error_occurred.emit(f"Retune failed: {exc}")
 
     @pyqtSlot(int, int)
@@ -235,7 +315,12 @@ class SDRWorker(QObject):
                 self._sdr.setGain(SOAPY_SDR_RX, 0, "LNA", gain_lna)
                 self._sdr.setGain(SOAPY_SDR_RX, 0, "VGA", gain_vga)
             except Exception as exc:
+                self._logger.exception("Gain change failed")
                 self.error_occurred.emit(f"Gain change failed: {exc}")
+
+    def set_signal_threshold(self, threshold_db):
+        """Update the signal detection threshold."""
+        self._signal_detector.set_threshold(threshold_db)
 
     @property
     def is_running(self) -> bool:

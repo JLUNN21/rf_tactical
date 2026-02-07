@@ -4,7 +4,7 @@ Loads and provides typed access to bands.yaml and settings.yaml.
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import yaml
@@ -40,11 +40,43 @@ class UISettings:
 @dataclass
 class ATAKSettings:
     """ATAK/TAK network settings."""
+    enabled: bool
     cot_multicast_group: str
     cot_multicast_port: int
     cot_stale_seconds: int
     cot_type: str
     cot_uid_prefix: str
+
+
+@dataclass
+class DisplaySettings:
+    """Display settings."""
+    brightness: int
+
+
+@dataclass
+class WaterfallSettings:
+    """Waterfall display settings."""
+    colormap: str
+
+
+@dataclass
+class SDRSettings:
+    """SDR gain settings."""
+    gain_lna: int
+    gain_vga: int
+
+
+@dataclass
+class DecoderSettings:
+    """Decoder enable/disable settings."""
+    adsb_enabled: bool
+    ism_enabled: bool
+    wifi_enabled: bool
+    ble_enabled: bool
+    cellular_enabled: bool
+    scanner_enabled: bool
+    cot_enabled: bool
 
 
 class ConfigManager:
@@ -67,6 +99,10 @@ class ConfigManager:
         self._bands: Dict[str, BandConfig] = {}
         self._ui: Optional[UISettings] = None
         self._atak: Optional[ATAKSettings] = None
+        self._display: Optional[DisplaySettings] = None
+        self._waterfall: Optional[WaterfallSettings] = None
+        self._sdr: Optional[SDRSettings] = None
+        self._decoder: Optional[DecoderSettings] = None
         self._load_bands()
         self._load_settings()
 
@@ -111,11 +147,39 @@ class ConfigManager:
 
         atak_data = data.get("atak_settings", {})
         self._atak = ATAKSettings(
+            enabled=bool(atak_data.get("enabled", True)),
             cot_multicast_group=str(atak_data.get("cot_multicast_group", "239.2.3.1")),
             cot_multicast_port=int(atak_data.get("cot_multicast_port", 6969)),
             cot_stale_seconds=int(atak_data.get("cot_stale_seconds", 300)),
             cot_type=str(atak_data.get("cot_type", "a-f-G-U")),
             cot_uid_prefix=str(atak_data.get("cot_uid_prefix", "rf-tactical")),
+        )
+
+        display_data = data.get("display_settings", {})
+        self._display = DisplaySettings(
+            brightness=int(display_data.get("brightness", 200)),
+        )
+
+        waterfall_data = data.get("waterfall_settings", {})
+        self._waterfall = WaterfallSettings(
+            colormap=str(waterfall_data.get("colormap", "TACTICAL GREEN")),
+        )
+
+        sdr_data = data.get("sdr_settings", {})
+        self._sdr = SDRSettings(
+            gain_lna=int(sdr_data.get("gain_lna", 32)),
+            gain_vga=int(sdr_data.get("gain_vga", 40)),
+        )
+
+        decoder_data = data.get("decoder_settings", {})
+        self._decoder = DecoderSettings(
+            adsb_enabled=bool(decoder_data.get("adsb_enabled", True)),
+            ism_enabled=bool(decoder_data.get("ism_enabled", True)),
+            wifi_enabled=bool(decoder_data.get("wifi_enabled", True)),
+            ble_enabled=bool(decoder_data.get("ble_enabled", True)),
+            cellular_enabled=bool(decoder_data.get("cellular_enabled", True)),
+            scanner_enabled=bool(decoder_data.get("scanner_enabled", True)),
+            cot_enabled=bool(decoder_data.get("cot_enabled", True)),
         )
 
     @property
@@ -127,6 +191,26 @@ class ConfigManager:
     def atak(self) -> ATAKSettings:
         """Access ATAK/TAK network settings."""
         return self._atak
+
+    @property
+    def display(self) -> DisplaySettings:
+        """Access display settings."""
+        return self._display
+
+    @property
+    def waterfall(self) -> WaterfallSettings:
+        """Access waterfall settings."""
+        return self._waterfall
+
+    @property
+    def sdr(self) -> SDRSettings:
+        """Access SDR gain settings."""
+        return self._sdr
+
+    @property
+    def decoder(self) -> DecoderSettings:
+        """Access decoder enable settings."""
+        return self._decoder
 
     @property
     def bands(self) -> Dict[str, BandConfig]:
@@ -167,3 +251,48 @@ class ConfigManager:
         self._bands.clear()
         self._load_bands()
         self._load_settings()
+
+    def save_settings(self):
+        """Persist settings to settings.yaml."""
+        filepath = os.path.join(self._config_dir, "settings.yaml")
+        data = {
+            "ui_settings": {
+                "waterfall_history": self._ui.waterfall_history,
+                "fft_update_fps": self._ui.fft_update_fps,
+                "touch_target_min_px": self._ui.touch_target_min_px,
+                "display_width": self._ui.display_width,
+                "display_height": self._ui.display_height,
+                "fullscreen": self._ui.fullscreen,
+                "hide_cursor": self._ui.hide_cursor,
+            },
+            "display_settings": {
+                "brightness": self._display.brightness,
+            },
+            "waterfall_settings": {
+                "colormap": self._waterfall.colormap,
+            },
+            "sdr_settings": {
+                "gain_lna": self._sdr.gain_lna,
+                "gain_vga": self._sdr.gain_vga,
+            },
+            "decoder_settings": {
+                "adsb_enabled": self._decoder.adsb_enabled,
+                "ism_enabled": self._decoder.ism_enabled,
+                "wifi_enabled": self._decoder.wifi_enabled,
+                "ble_enabled": self._decoder.ble_enabled,
+                "cellular_enabled": self._decoder.cellular_enabled,
+                "scanner_enabled": self._decoder.scanner_enabled,
+                "cot_enabled": self._decoder.cot_enabled,
+            },
+            "atak_settings": {
+                "enabled": getattr(self._atak, "enabled", True),
+                "cot_multicast_group": self._atak.cot_multicast_group,
+                "cot_multicast_port": self._atak.cot_multicast_port,
+                "cot_stale_seconds": self._atak.cot_stale_seconds,
+                "cot_type": self._atak.cot_type,
+                "cot_uid_prefix": self._atak.cot_uid_prefix,
+            },
+        }
+
+        with open(filepath, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(data, fh, sort_keys=False)

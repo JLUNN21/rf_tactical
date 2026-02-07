@@ -7,7 +7,27 @@ ui_settings:
   fullscreen: true
   hide_cursor: true
 
+display_settings:
+  brightness: 200
+
+waterfall_settings:
+  colormap: "TACTICAL GREEN"
+
+sdr_settings:
+  gain_lna: 32
+  gain_vga: 40
+
+decoder_settings:
+  adsb_enabled: true
+  ism_enabled: true
+  wifi_enabled: true
+  ble_enabled: true
+  cellular_enabled: true
+  scanner_enabled: true
+  cot_enabled: true
+
 atak_settings:
+  enabled: true
   cot_multicast_group: "239.2.3.1"
   cot_multicast_port: 6969
   cot_stale_seconds: 300
