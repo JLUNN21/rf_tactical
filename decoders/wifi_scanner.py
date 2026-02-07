@@ -6,6 +6,7 @@ Scans wlan0 with iwlist, parses results, and emits network updates.
 import re
 import subprocess
 import time
+import sys
 from typing import Dict, Optional
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QMutex, QMutexLocker
@@ -55,6 +56,10 @@ class WiFiScanner(QObject):
         Returns:
             iwlist stdout on success, None on failure.
         """
+        if sys.platform != "linux":
+            self.error_occurred.emit("DECODER OFFLINE - Not available on Windows")
+            return None
+
         try:
             result = subprocess.run(
                 ["sudo", "iwlist", "wlan0", "scan"],

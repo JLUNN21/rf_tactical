@@ -11,10 +11,8 @@ def install_crash_handler(logger: logging.Logger) -> None:
 
     def _handle_exception(exc_type, exc, tb):
         logger.error("Unhandled exception", exc_info=(exc_type, exc, tb))
-        try:
-            python = sys.executable
-            os.execv(python, [python] + sys.argv)
-        except Exception:
-            traceback.print_exc()
+        # Avoid auto-restart loops while diagnosing startup failures.
+        # Print the actual exception details to stdout.
+        traceback.print_exception(exc_type, exc, tb)
 
     sys.excepthook = _handle_exception

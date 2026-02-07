@@ -5,6 +5,7 @@ Runs hackrf_sweep for a one-shot sweep, detects cellular bands, and emits result
 
 import subprocess
 import time
+import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -73,6 +74,10 @@ class CellularScanner(QObject):
 
     def _run_sweep(self) -> Optional[List[Tuple[float, float]]]:
         """Run hackrf_sweep and return list of (frequency_hz, power_dbm)."""
+        if sys.platform != "linux":
+            self.error_occurred.emit("DECODER OFFLINE - Not available on Windows")
+            return None
+
         try:
             self._process = subprocess.Popen(
                 [

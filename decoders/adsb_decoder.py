@@ -7,6 +7,7 @@ decodes ADS-B messages with pyModeS, and maintains aircraft state.
 import socket
 import subprocess
 import time
+import sys
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -74,6 +75,10 @@ class ADSBDecoder(QObject):
         Returns:
             True if subprocess started successfully, False otherwise.
         """
+        if sys.platform != "linux":
+            self.error_occurred.emit("DECODER OFFLINE - Not available on Windows")
+            return False
+
         try:
             self._dump1090_process = subprocess.Popen(
                 [

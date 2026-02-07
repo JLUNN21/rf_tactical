@@ -1,93 +1,110 @@
-# RF TACTICAL MONITOR - PROJECT RULES
+# RF Tactical - Windows Development Rules
 
-## CRITICAL REQUIREMENTS
-1. NEVER generate placeholder code, TODOs, stub functions, or mock implementations
-2. ALL code must be production-ready and functional for REAL hardware
-3. Write code for actual HackRF/SDR operation - no mock modes, no simulations
-4. Code should handle missing hardware gracefully (log errors, show status, don't crash)
-5. If a feature cannot be implemented, explain why - never fake it with placeholders
+## Platform Compatibility
+- Target: Raspberry Pi 5 (ARM64 Linux) for deployment
+- Dev environment: Windows x64
+- ALL code must work on both platforms
 
-## TECHNOLOGY STACK
-- PyQt5: pip install PyQt5 (on dev machine), python3-pyqt5 (on Pi)
-- pyqtgraph: pip package
-- numpy, scipy: pip packages
-- SoapySDR: conditional import with graceful handling if missing
-- Python: System Python 3
+## Critical Requirements
 
-## TARGET PLATFORM
-- Deployment: Raspberry Pi 5, ARM64 architecture
-- Display: 1024x600 SparkFun LCD touchscreen
-- Input: Touch-only in production (no keyboard/mouse)
-- All touch targets: minimum 44px per MIL-STD-1472H
-- Development: Personal machine, code for real hardware deployment
+### File Paths
+- Use `pathlib.Path` ALWAYS
+- Example: `Path.home() / "rf_tactical" / "recordings"`
+- NEVER: `/home/pi/rf_tactical/recordings`
 
-## CODE STANDARDS
-- Absolute imports: from ui.waterfall_widget import TacticalWaterfall
-- Type hints on all function signatures
-- Docstrings for all classes and public methods
-- File paths: relative to project root
-- All measurements in SI units (Hz not MHz, meters not feet, seconds not ms)
-- Time: UTC only, 24-hour format
+### Hardware Dependencies
+```python
+# Pattern for all hardware imports:
+try:
+    import SoapySDR
+    sdr = SoapySDR.Device(dict(driver="hackrf"))
+except (ImportError, RuntimeError):
+    sdr = None
+    MOCK_MODE = True
+```
 
-## PERFORMANCE REQUIREMENTS
-- Waterfall display: target 30 FPS minimum
-- FFT processing: must not block UI thread
-- Use QThread for all SDR/decoder operations
-- Pre-allocate numpy arrays, no per-frame allocation
-- Use float32 throughout (ARM NEON optimization)
+### System Commands
+```python
+# Pattern for subprocess calls:
+import sys
+if sys.platform == 'linux':
+    subprocess.run(['hackrf_info'])
+else:
+    # Windows: skip or mock
+    pass
+```
 
-## UI REQUIREMENTS
-- Color scheme: F-35 TSD tactical (green #00FF41 on black #0A0A0A)
-- Font: "DejaVu Sans Mono", monospace fallback
-- All text: uppercase for headers/labels, sentence case for content
-- Resolution: 1024x600 (SparkFun display)
-- Frameless fullscreen window (Qt.FramelessWindowHint)
+### Testing Requirements
+- Create unit tests for ALL new code in `tests/` folder
+- Mock hardware dependencies
+- Tests must pass on Windows (without hardware)
+- Example test structure:
+```python
+import unittest
+from unittest.mock import Mock, patch
 
-## ERROR HANDLING
-- All SDR operations: try/except with graceful degradation
-- Missing hardware: log error, show status message, continue operation
-- All file I/O: check existence before opening
-- All subprocess launches: capture stderr, handle failure
-- Never crash - log errors and show user-friendly status messages
-- Status bar indicators:
-  * "SDR: NOT CONNECTED" - HackRF not detected
-  * "SDR: ERROR - [msg]" - Connection/operation failed
-  * "SDR: ACTIVE" - Hardware operating normally
+class TestSDRManager(unittest.TestCase):
+    @patch('radio.sdr_manager.SoapySDR')
+    def test_without_hardware(self, mock_soapy):
+        # Test code here
+        pass
+```
 
-## TESTING APPROACH
-- Code will be tested on actual Raspberry Pi hardware after Step 18 complete
-- During development (Steps 7-18): code review only, no execution tests
-- All code must be ready for immediate hardware deployment
-- Focus on correctness, performance, and real-time operation
-- No mock modes, simulations, or fake data generation
+## Task Workflow
+1. Scan code for platform issues FIRST
+2. Fix compatibility problems
+3. Create/update tests
+4. Verify tests pass on Windows
+5. Then implement new features
 
-## VERIFICATION FORMAT FOR STEPS 7-18
-For all prompts during development phase:
-[VERIFICATION]
-After creation, code review only - no testing until Step 18 complete.
-Ensure:
-- No syntax errors
-- All imports are correct
-- Code is production-ready for real hardware
-- Graceful error handling if hardware missing
-Hardware testing will occur after all 18 steps are complete.
+## Current Priority
+**Scan entire codebase for:**
+- Hardcoded Linux paths (starting with `/`)
+- `subprocess.run()` without platform checks
+- Hardware imports without try/except
+- System file reads without existence checks
 
-## FILE ORGANIZATION
-- config/: YAML files only
-- ui/: PyQt5 widgets and views only
-- radio/: SDR interfacing and signal processing
-- decoders/: Protocol-specific decoders (ADS-B, ISM, etc.)
-- network/: ATAK/CoT networking
-- utils/: Helper functions and shared utilities
-- assets/: Fonts, icons, static resources
+Report findings with file:line and suggested fixes.
+```
 
-## SECURITY/LEGAL CONSTRAINTS
-- ADS-B: receive only, NEVER transmit (federal crime)
-- Cellular: passive monitoring only, no active probing
-- Wi-Fi: use built-in wlan0, not HackRF (bandwidth limitation)
-- BLE: use built-in Bluetooth, not HackRF (protocol limitation)
+---
 
-## DOCUMENTATION
-- Every commit: meaningful message describing what was added/fixed
-- Code comments: explain WHY, not WHAT (code should be self-documenting)
-- No unnecessary documentation during rapid development phase
+## 🚀 **NEXT STEPS**
+
+**After adding the rule:**
+
+1. **Verify it's active:**
+```
+   Click ⚖️ in Cline → Check "Workspace Rules" → See .clinerules enabled
+```
+
+2. **Give Cline this task:**
+```
+   Follow the platform compatibility rules in .clinerules.
+   
+   Task: Scan the entire rf_tactical codebase and create a detailed report of all platform-specific code that will break on Windows.
+   
+   Search for:
+   1. Hardcoded Linux paths (any string starting with "/" that looks like a path)
+   2. subprocess calls without platform checks (hackrf_info, rtl_433, dump1090, etc.)
+   3. Hardware imports without error handling (import SoapySDR, import gpsd)
+   4. System file reads (/proc/stat, /sys/class/thermal/, /sys/class/backlight/)
+   
+   For each issue found, provide:
+   - File path and line number
+   - Current code snippet
+   - Suggested cross-platform fix
+   - Severity (CRITICAL/HIGH/MEDIUM/LOW)
+   
+   Create the report, then ask me which issues to fix first.
+```
+
+3. **Cline will scan and create a prioritized fix list**
+
+---
+
+## ⚡ **Quick Test**
+
+**To verify the rule is working, ask Cline:**
+```
+What are the platform compatibility rules for this project?

@@ -4,7 +4,12 @@ Manages the QThread lifecycle for the SDRWorker, providing
 start/stop/retune controls from the main GUI thread.
 """
 
-import SoapySDR
+try:
+    import SoapySDR
+    SDR_AVAILABLE = True
+except Exception:
+    SoapySDR = None
+    SDR_AVAILABLE = False
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from radio.sdr_worker import SDRWorker
@@ -132,6 +137,11 @@ class SDRManager(QObject):
     def start(self):
         """Start SDR capture on a new thread."""
         if self._thread is not None and self._thread.isRunning():
+            return
+
+        if not SDR_AVAILABLE:
+            self.error_occurred.emit("SDR OFFLINE")
+            self._set_connected(False)
             return
 
         if not self._is_connected:
@@ -282,6 +292,8 @@ class SDRManager(QObject):
             self._set_connected(False)
 
     def _probe_device(self) -> bool:
+        if not SDR_AVAILABLE:
+            return False
         try:
             results = SoapySDR.Device.enumerate("driver=hackrf")
             return len(results) > 0

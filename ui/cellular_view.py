@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHeaderView,
     QLabel,
+    QTableView,
 )
 from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSlot
 from PyQt5.QtGui import QFont, QColor

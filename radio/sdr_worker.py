@@ -6,8 +6,17 @@ and emits waterfall rows via Qt signals.
 
 import time
 import numpy as np
-import SoapySDR
-from SoapySDR import SOAPY_SDR_RX, SOAPY_SDR_CF32, SOAPY_SDR_OVERFLOW
+
+try:
+    import SoapySDR
+    from SoapySDR import SOAPY_SDR_RX, SOAPY_SDR_CF32, SOAPY_SDR_OVERFLOW
+    SDR_AVAILABLE = True
+except Exception:
+    SoapySDR = None
+    SOAPY_SDR_RX = None
+    SOAPY_SDR_CF32 = None
+    SOAPY_SDR_OVERFLOW = None
+    SDR_AVAILABLE = False
 
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QMutex, QMutexLocker
 
@@ -80,6 +89,12 @@ class SDRWorker(QObject):
 
     def _open_device(self) -> bool:
         """Open HackRF via SoapySDR and configure parameters."""
+        if not SDR_AVAILABLE:
+            self._logger.error("SoapySDR not available")
+            self.error_occurred.emit("SDR OFFLINE")
+            self.connection_status.emit("DISCONNECTED", 0.0)
+            return False
+
         try:
             results = SoapySDR.Device.enumerate("driver=hackrf")
             if len(results) == 0:

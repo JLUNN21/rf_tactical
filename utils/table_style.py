@@ -53,8 +53,11 @@ class TableStyler:
     def set_column_widths(table_widget, widths_dict):
         """Set specific column widths by name."""
         header = table_widget.horizontalHeader()
+        model = table_widget.model()
+        if model is None:
+            return
         for col_name, width in widths_dict.items():
-            for i in range(table_widget.columnCount()):
-                item = header.model().headerData(i, header.orientation(), Qt.DisplayRole)
+            for i in range(model.columnCount()):
+                item = model.headerData(i, header.orientation(), Qt.DisplayRole)
                 if item == col_name:
                     table_widget.setColumnWidth(i, width)

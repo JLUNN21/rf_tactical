@@ -134,7 +134,10 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
 
     def _apply_grid_and_ticks(self):
         grid_pen = pg.mkPen("#1A3D1A", width=1, style=Qt.DotLine)
-        for plot in (self._spectrum_plot, self._waterfall_plot):
+        plots = [self._spectrum_plot]
+        if hasattr(self, "_waterfall_plot"):
+            plots.append(self._waterfall_plot)
+        for plot in plots:
             plot.showGrid(x=True, y=True, alpha=1.0)
             for axis_key in ("bottom", "left"):
                 axis = plot.getAxis(axis_key)
@@ -147,6 +150,8 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
         self._update_axis_ticks()
 
     def _update_axis_ticks(self):
+        if not hasattr(self, "_waterfall_plot"):
+            return
         freq_min, freq_max = self._waterfall_plot.viewRange()[0]
         x_ticks = self._format_ticks(np.linspace(freq_min, freq_max, 5), 3)
         y_ticks = self._format_ticks(np.linspace(self._db_min, self._db_max, 4), 0)

@@ -7,7 +7,7 @@ Columns: ICAO, Callsign, Altitude, Speed, Heading, Distance, Last Seen.
 import time
 from typing import Dict, List
 
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHeaderView, QLabel
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHeaderView, QLabel, QTableView
 from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSlot
 from ui.touch_table import TouchTableView, DetailDialog
 from PyQt5.QtGui import QFont, QColor

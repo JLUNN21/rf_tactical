@@ -49,8 +49,13 @@ class IQPlayer(QObject):
             sample_rate = metadata["sample_rate_hz"]
             gain_vga = metadata["gain_vga"]
 
-            import SoapySDR
-            from SoapySDR import SOAPY_SDR_TX, SOAPY_SDR_CF32
+            try:
+                import SoapySDR
+                from SoapySDR import SOAPY_SDR_TX, SOAPY_SDR_CF32
+            except ImportError:
+                self.playback_error.emit("Playback unavailable - SoapySDR not installed")
+                self.playing = False
+                return
 
             self.sdr = SoapySDR.Device(dict(driver="hackrf"))
             self.sdr.setSampleRate(SOAPY_SDR_TX, 0, sample_rate)

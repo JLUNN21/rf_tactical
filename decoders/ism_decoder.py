@@ -6,6 +6,7 @@ Launches rtl_433 with HackRF, parses JSON output, and tracks devices.
 import json
 import subprocess
 import time
+import sys
 from typing import Dict, Optional
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QMutex, QMutexLocker
@@ -56,6 +57,10 @@ class ISMDecoder(QObject):
         Returns:
             True if subprocess started successfully, False otherwise.
         """
+        if sys.platform != "linux":
+            self.error_occurred.emit("DECODER OFFLINE - Not available on Windows")
+            return False
+
         try:
             self._rtl_process = subprocess.Popen(
                 [
