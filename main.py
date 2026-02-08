@@ -7,6 +7,16 @@ into a fullscreen kiosk UI for 800×480 touchscreen.
 
 import sys
 import os
+from pathlib import Path
+
+# DEBUG: Print environment at startup
+print("=" * 60)
+print("ENVIRONMENT CHECK AT STARTUP")
+print("=" * 60)
+print(f"SOAPY_SDR_PLUGIN_PATH: {os.environ.get('SOAPY_SDR_PLUGIN_PATH', 'NOT SET')}")
+print(f"PATH contains radioconda: {'radioconda' in os.environ.get('PATH', '')}")
+print(f"Python executable: {sys.executable}")
+print("=" * 60)
 from datetime import datetime, timezone
 import time
 
@@ -28,6 +38,7 @@ from ui.wifi_view import WiFiView
 from ui.cellular_view import CellularView
 from ui.scanner_view import ScannerView
 from ui.settings_dialog import SettingsDialog
+from ui.log_view import LogView
 from utils.performance import PerformanceMonitor
 from utils.logger import setup_logger
 from utils.crash_handler import install_crash_handler
@@ -37,6 +48,7 @@ from decoders.wifi_scanner import WiFiScannerManager
 from decoders.ble_scanner import BLEScannerManager
 from decoders.cellular_scanner import CellularScannerManager
 from radio.sdr_manager import SDRManager
+from radio.sdr_manager import SDR_AVAILABLE
 from utils.config import ConfigManager
 
 
@@ -52,9 +64,10 @@ class KioskMainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setWindowFlags(Qt.Window)
+        self._cursor_hidden = True
         self.setCursor(QCursor(Qt.BlankCursor))
-        self.setFixedSize(800, 480)
+        self._apply_screen_geometry()
 
         self._config = ConfigManager()
         self._logger = setup_logger(debug=bool(os.environ.get("RF_TACTICAL_DEBUG")))
@@ -104,7 +117,7 @@ class KioskMainWindow(QMainWindow):
         self._setup_performance()
         self._start_clock()
         self._connect_signals()
-        self.showFullScreen()
+        self.showMaximized()
 
     def _build_ui(self):
         """Construct the full UI layout: status bar → tabs → button bar."""
@@ -119,6 +132,27 @@ class KioskMainWindow(QMainWindow):
         self._build_tabs(main_layout)
         self._build_button_bar(main_layout)
 
+    def _apply_screen_geometry(self) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.setFixedSize(800, 480)
+            return
+        geometry = screen.geometry()
+        self.setGeometry(geometry)
+
+    def _toggle_cursor(self) -> None:
+        self._cursor_hidden = not self._cursor_hidden
+        if self._cursor_hidden:
+            QApplication.setOverrideCursor(QCursor(Qt.BlankCursor))
+            self.cursor_toggle_button.setText("CURSOR")
+        else:
+            QApplication.restoreOverrideCursor()
+            self.cursor_toggle_button.setText("HIDE")
+
+    def _request_close(self) -> None:
+        self._allow_close = True
+        self.close()
+
     # ── Status Bar ──────────────────────────────────────────────
 
     def _build_status_bar(self, parent_layout):
@@ -126,7 +160,7 @@ class KioskMainWindow(QMainWindow):
         status_frame = QFrame()
         self._status_frame = status_frame
         status_frame.setObjectName("statusBarFrame")
-        status_frame.setFixedHeight(32)
+        status_frame.setFixedHeight(44)
         status_frame.setStyleSheet(
             "#statusBarFrame {"
             "  background-color: #0A0A0A;"
@@ -136,7 +170,7 @@ class KioskMainWindow(QMainWindow):
         )
 
         status_layout = QHBoxLayout(status_frame)
-        status_layout.setContentsMargins(8, 2, 8, 2)
+        status_layout.setContentsMargins(10, 6, 10, 6)
         status_layout.setSpacing(12)
 
         sf = QFont("Source Code Pro", 11, QFont.Bold)
@@ -145,7 +179,19 @@ class KioskMainWindow(QMainWindow):
         self.status_label.setFont(sf)
         self.status_label.setStyleSheet("color: #00CC33; border: none; background: transparent;")
         self.status_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        status_layout.addWidget(self.status_label)
+        status_layout.addWidget(self.status_label, 1)
+
+        self.cursor_toggle_button = QPushButton("CURSOR")
+        self.cursor_toggle_button.setMinimumHeight(32)
+        self.cursor_toggle_button.setFixedWidth(90)
+        self.cursor_toggle_button.clicked.connect(self._toggle_cursor)
+        status_layout.addWidget(self.cursor_toggle_button)
+
+        self.close_button = QPushButton("EXIT")
+        self.close_button.setMinimumHeight(32)
+        self.close_button.setFixedWidth(70)
+        self.close_button.clicked.connect(self._request_close)
+        status_layout.addWidget(self.close_button)
 
         parent_layout.addWidget(status_frame)
 
@@ -176,6 +222,7 @@ class KioskMainWindow(QMainWindow):
         self._build_wifi_tab()
         self._build_cellular_tab()
         self._build_scanner_tab()
+        self._build_logs_tab()
 
         parent_layout.addWidget(self.tab_widget, 1)
         self.tab_widget.setAttribute(Qt.WA_AcceptTouchEvents, True)
@@ -354,6 +401,20 @@ class KioskMainWindow(QMainWindow):
         self.tab_pages["SCANNER"] = page
         self.tab_widget.addTab(page, "SCANNER")
 
+    def _build_logs_tab(self):
+        """LOGS tab with live system log stream."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+
+        self._log_view = LogView()
+        self._log_view.attach_logger(self._logger)
+        layout.addWidget(self._log_view, 1)
+
+        self.tab_pages["LOGS"] = page
+        self.tab_widget.addTab(page, "LOGS")
+
     # ── Button Bar ──────────────────────────────────────────────
 
     def _build_button_bar(self, parent_layout):
@@ -418,9 +479,16 @@ class KioskMainWindow(QMainWindow):
         self._sdr_manager.capture_stopped.connect(self._on_capture_stopped)
         self._sdr_manager.connection_status.connect(self._on_sdr_status)
         self._sdr_manager.recording_status.connect(self._on_recording_status)
-        self._sdr_manager.connection_changed.connect(lambda _: self._update_button_states())
+        self._sdr_manager.connection_changed.connect(self._on_sdr_connection_changed)
         self._sdr_manager.running_changed.connect(lambda _: self._update_button_states())
         self._update_button_states()
+
+        self._logger.info("SDR available: %s", SDR_AVAILABLE)
+
+        if SDR_AVAILABLE:
+            self._update_status_sdr("SDR: IDLE")
+        else:
+            self._update_status_sdr("SDR: NOT AVAILABLE")
 
     def _setup_adsb(self):
         """Initialize the ADS-B decoder manager and wire up signals."""
@@ -431,6 +499,13 @@ class KioskMainWindow(QMainWindow):
             self._adsb_manager.decoder_started.connect(self._adsb_view.set_status)
             self._adsb_manager.decoder_stopped.connect(lambda: self._adsb_view.set_status("ADS-B DECODER STOPPED"))
             self._adsb_manager.error_occurred.connect(self._on_adsb_error)
+        
+        # Auto-start ADS-B decoder on launch (Linux only)
+        if sys.platform == "linux":
+            QTimer.singleShot(2000, lambda: self._adsb_manager.start(
+                center_freq=1090000000,
+                sample_rate=2000000
+            ))
 
     def _setup_ism(self):
         """Initialize the ISM decoder manager and wire up signals."""
@@ -442,6 +517,12 @@ class KioskMainWindow(QMainWindow):
             self._ism_manager.decoder_started.connect(self._ism_view.set_status)
             self._ism_manager.decoder_stopped.connect(lambda: self._ism_view.set_status("ISM DECODER STOPPED"))
             self._ism_manager.error_occurred.connect(self._on_ism_error)
+        
+        # Auto-start ISM decoder on launch (Linux only)
+        if sys.platform == "linux":
+            QTimer.singleShot(3000, lambda: self._ism_manager.start(
+                center_freq=433920000
+            ))
 
     def _setup_wifi(self):
         """Initialize the Wi-Fi scanner manager and wire up signals."""
@@ -452,6 +533,10 @@ class KioskMainWindow(QMainWindow):
             self._wifi_manager.scanner_started.connect(self._wifi_view.set_status)
             self._wifi_manager.scanner_stopped.connect(lambda: self._wifi_view.set_status("WIFI SCANNER STOPPED"))
             self._wifi_manager.error_occurred.connect(self._on_wifi_error)
+        
+        # Auto-start Wi-Fi scanner on launch (Linux only)
+        if sys.platform == "linux":
+            QTimer.singleShot(3500, lambda: self._wifi_manager.start())
 
     def _setup_ble(self):
         """Initialize the BLE scanner manager and wire up signals."""
@@ -462,6 +547,10 @@ class KioskMainWindow(QMainWindow):
             self._ble_manager.scanner_started.connect(self._wifi_view.set_ble_status)
             self._ble_manager.scanner_stopped.connect(lambda: self._wifi_view.set_ble_status("BLE SCANNER STOPPED"))
             self._ble_manager.error_occurred.connect(self._on_ble_error)
+        
+        # Auto-start BLE scanner on launch (Linux only)
+        if sys.platform == "linux":
+            QTimer.singleShot(4000, lambda: self._ble_manager.start())
 
     def _setup_cellular(self):
         """Initialize the cellular scanner manager and wire up signals."""
@@ -473,6 +562,10 @@ class KioskMainWindow(QMainWindow):
             self._cellular_manager.scanner_started.connect(self._cellular_view.set_status)
             self._cellular_manager.scanner_stopped.connect(lambda: self._cellular_view.set_status("CELLULAR SWEEP COMPLETE"))
             self._cellular_manager.error_occurred.connect(self._on_cellular_error)
+        
+        # Auto-start cellular scanner on launch (Linux only)
+        if sys.platform == "linux":
+            QTimer.singleShot(4500, lambda: self._cellular_manager.start())
 
     # ── Signal Wiring ───────────────────────────────────────────
 
@@ -565,8 +658,22 @@ class KioskMainWindow(QMainWindow):
     def _on_waterfall_row(self, magnitude_db):
         """Route incoming FFT data to the active tab's waterfall."""
         self._fps_counter += 1
+        
+        # Debug: Log first few waterfall rows to verify data flow
+        if self._fps_counter <= 3:
+            self._logger.info("Waterfall data received: active_tab=%s, data_shape=%s, data_range=[%.2f, %.2f]",
+                            self._active_tab, 
+                            magnitude_db.shape if hasattr(magnitude_db, 'shape') else 'unknown',
+                            float(magnitude_db.min()) if hasattr(magnitude_db, 'min') else 0,
+                            float(magnitude_db.max()) if hasattr(magnitude_db, 'max') else 0)
+        
         if self._active_tab in self._waterfalls:
             self._waterfalls[self._active_tab].add_fft_row(magnitude_db)
+        else:
+            # Log if active tab doesn't have a waterfall (expected for ADS-B, WI-FI/BLE, LOGS)
+            if self._fps_counter == 1:
+                self._logger.debug("Active tab '%s' has no waterfall widget (available: %s)", 
+                                 self._active_tab, list(self._waterfalls.keys()))
 
     # ── SDR Status Handlers ─────────────────────────────────────
 
@@ -578,31 +685,36 @@ class KioskMainWindow(QMainWindow):
         self._render_status_bar()
 
     def _on_adsb_error(self, msg: str) -> None:
-        self._logger.warning("ADS-B error: %s", msg)
+        """Handle ADS-B decoder errors and log to LOGS tab."""
+        self._logger.error(f"ADS-B: {msg}")
         if self._adsb_view is not None:
             self._adsb_view.set_status("DECODER OFFLINE")
             self._adsb_view.set_amber_warning("DECODER OFFLINE")
 
     def _on_ism_error(self, msg: str) -> None:
-        self._logger.warning("ISM error: %s", msg)
+        """Handle ISM decoder errors and log to LOGS tab."""
+        self._logger.error(f"ISM: {msg}")
         if self._ism_view is not None:
             self._ism_view.set_status("DECODER OFFLINE")
             self._ism_view.set_amber_warning("DECODER OFFLINE")
 
     def _on_wifi_error(self, msg: str) -> None:
-        self._logger.warning("Wi-Fi error: %s", msg)
+        """Handle Wi-Fi scanner errors and log to LOGS tab."""
+        self._logger.error(f"Wi-Fi: {msg}")
         if self._wifi_view is not None:
             self._wifi_view.set_status("DECODER OFFLINE")
             self._wifi_view.set_amber_warning("DECODER OFFLINE")
 
     def _on_ble_error(self, msg: str) -> None:
-        self._logger.warning("BLE error: %s", msg)
+        """Handle BLE scanner errors and log to LOGS tab."""
+        self._logger.error(f"BLE: {msg}")
         if self._wifi_view is not None:
             self._wifi_view.set_ble_status("DECODER OFFLINE")
             self._wifi_view.set_ble_amber_warning("DECODER OFFLINE")
 
     def _on_cellular_error(self, msg: str) -> None:
-        self._logger.warning("Cellular error: %s", msg)
+        """Handle cellular scanner errors and log to LOGS tab."""
+        self._logger.error(f"Cellular: {msg}")
         if self._cellular_view is not None:
             self._cellular_view.set_status("DECODER OFFLINE")
             self._cellular_view.set_amber_warning("DECODER OFFLINE")
@@ -636,19 +748,18 @@ class KioskMainWindow(QMainWindow):
 
     def _on_start(self):
         """Start SDR capture."""
+        self._logger.info("START button pressed - Active tab: %s", self._active_tab)
+        
         if self._active_tab == "ADS-B":
             if self._adsb_manager is not None and not self._adsb_manager.is_running:
                 if self._sdr_manager is not None and self._sdr_manager.is_running:
                     self._sdr_manager.stop()
+                self._logger.info("Starting ADS-B decoder at 1090 MHz")
                 self._adsb_manager.start()
             return
 
-        if self._active_tab == "ISM":
-            if self._adsb_manager is not None and self._adsb_manager.is_running:
-                self._adsb_manager.stop()
-            if self._ism_manager is not None and not self._ism_manager.is_running:
-                self._ism_manager.start()
-            return
+        # ISM tab uses SDR waterfall, not decoder
+        # (decoder logic removed - ISM tab shows live SDR waterfall)
 
         if self._active_tab == "WI-FI/BLE":
             if self._wifi_manager is not None and not self._wifi_manager.is_running:
@@ -658,13 +769,16 @@ class KioskMainWindow(QMainWindow):
                     self._adsb_manager.stop()
                 if self._ism_manager is not None and self._ism_manager.is_running:
                     self._ism_manager.stop()
+                self._logger.info("Starting Wi-Fi scanner")
                 self._wifi_manager.start()
                 if self._ble_manager is not None and not self._ble_manager.is_running:
+                    self._logger.info("Starting BLE scanner")
                     self._ble_manager.start()
             return
 
         if self._active_tab == "CELLULAR":
             if self._cellular_manager is not None and not self._cellular_manager.is_running:
+                self._logger.info("Starting cellular scanner")
                 self._cellular_manager.start()
             return
 
@@ -676,27 +790,39 @@ class KioskMainWindow(QMainWindow):
                 if tab_name == "SCANNER":
                     center_freq = self._scanner_view.start_spin.value() * 1e6
                     sample_rate = self._scanner_band.sample_rate_hz
+                    self._logger.info("Starting SDR on SCANNER (%.2f MHz, %.2f Msps)", center_freq / 1e6, sample_rate / 1e6)
                 else:
                     band = self._config.get_band(TAB_BAND_MAP[tab_name])
                     center_freq = band.center_freq_hz
                     sample_rate = band.sample_rate_hz
+                    self._logger.info("Starting SDR on %s (%.2f MHz, %.2f Msps)", band.name, center_freq / 1e6, sample_rate / 1e6)
                 self._sdr_manager.retune(center_freq, sample_rate)
             self._sdr_manager.start()
 
     def _on_stop(self):
         """Stop SDR capture."""
+        self._logger.info("STOP button pressed")
+        
         if self._sdr_manager is not None:
+            self._logger.info("Stopping SDR manager")
             self._sdr_manager.stop()
         if self._adsb_manager is not None:
+            self._logger.info("Stopping ADS-B decoder")
             self._adsb_manager.stop()
         if self._ism_manager is not None:
+            self._logger.info("Stopping ISM decoder")
             self._ism_manager.stop()
         if self._wifi_manager is not None:
+            self._logger.info("Stopping Wi-Fi scanner")
             self._wifi_manager.stop()
         if self._ble_manager is not None:
+            self._logger.info("Stopping BLE scanner")
             self._ble_manager.stop()
         if self._cellular_manager is not None:
+            self._logger.info("Stopping cellular scanner")
             self._cellular_manager.stop()
+        
+        self._update_button_states()
 
     def _on_scan(self):
         """Handle SCAN button actions by tab context."""
@@ -717,36 +843,66 @@ class KioskMainWindow(QMainWindow):
         self._logger.info("MARK: %s @ %.3f MHz", timestamp, freq / 1e6)
 
     def _update_button_states(self):
-        """Update button enabled states and styles based on SDR status."""
+        """Update button enabled/disabled states and visual feedback based on SDR status."""
+        # Get SDR state
         if self._sdr_manager is None:
             sdr_connected = False
             sdr_running = False
         else:
             sdr_connected = self._sdr_manager.is_connected()
             sdr_running = self._sdr_manager.is_running
-
-        start_enabled = sdr_connected and not sdr_running
-        stop_enabled = sdr_running
-        mark_enabled = sdr_running
-        scan_enabled = sdr_connected
-
+        
+        # Log state changes for debugging (use INFO so it shows in LOGS tab)
+        self._logger.info("Button state update: SDR_AVAILABLE=%s, connected=%s, running=%s", 
+                          SDR_AVAILABLE, sdr_connected, sdr_running)
+        
+        # START: enabled if SDR available, connected, and not running
+        start_enabled = SDR_AVAILABLE and sdr_connected and not sdr_running
         self.buttons["startButton"].setEnabled(start_enabled)
+        if start_enabled:
+            self._set_button_style("startButton", "#00FF41", "#00FF41")  # Bright green
+        else:
+            self._set_button_style("startButton", "#006B1F", "#003310")  # Dark green
+        
+        # STOP: enabled if SDR running
+        stop_enabled = sdr_running
         self.buttons["stopButton"].setEnabled(stop_enabled)
+        if stop_enabled:
+            self._set_button_style("stopButton", "#FF0000", "#FF0000")  # Bright red
+        else:
+            self._set_button_style("stopButton", "#660000", "#330000")  # Dark red
+        
+        # MARK: enabled if SDR running
+        mark_enabled = sdr_running
         self.buttons["markButton"].setEnabled(mark_enabled)
+        if mark_enabled:
+            self._set_button_style("markButton", "#FFB000", "#FFB000")  # Bright amber
+        else:
+            self._set_button_style("markButton", "#665000", "#332800")  # Dark amber
+        
+        # SCAN: enabled if SDR available and connected
+        scan_enabled = SDR_AVAILABLE and sdr_connected
         self.buttons["scanButton"].setEnabled(scan_enabled)
+        if scan_enabled:
+            self._set_button_style("scanButton", "#80E0FF", "#80E0FF")  # Bright cyan
+        else:
+            self._set_button_style("scanButton", "#406070", "#203038")  # Dark cyan
+        
+        # CONFIG: always enabled
         self.buttons["configButton"].setEnabled(True)
+        self._set_button_style("configButton", "#00CC33", "#00CC33")  # Always bright green
 
-        self._set_button_style("startButton", "#00FF41", start_enabled)
-        self._set_button_style("stopButton", "#FF0000", stop_enabled)
-        self._set_button_style("markButton", "#FFB000", mark_enabled)
-        self._set_button_style("scanButton", "#80E0FF", scan_enabled)
-        self._set_button_style("configButton", "#00FF41", True)
-
-    def _set_button_style(self, button_key: str, enabled_color: str, enabled: bool) -> None:
-        color = enabled_color if enabled else "#006B1F"
+    def _set_button_style(self, button_key: str, enabled_color: str, disabled_color: str) -> None:
+        """Set button color style for enabled and disabled states.
+        
+        Args:
+            button_key: Button identifier in self.buttons dict
+            enabled_color: Color when button is enabled
+            disabled_color: Color when button is disabled
+        """
         self.buttons[button_key].setStyleSheet(
-            f"QPushButton {{ color: {color}; }}"
-            "QPushButton:disabled { color: #006B1F; }"
+            f"QPushButton {{ color: {enabled_color}; }}"
+            f"QPushButton:disabled {{ color: {disabled_color}; }}"
         )
 
     def _setup_performance(self):
@@ -915,6 +1071,7 @@ class KioskMainWindow(QMainWindow):
     def _init_gps(self):
         try:
             import gpsd  # noqa: F401
+            # GPS only available on Linux with gpsd installed
             self._gps_available = True
             self._gps_status = "SEARCHING"
         except Exception:
@@ -927,8 +1084,12 @@ class KioskMainWindow(QMainWindow):
         self._render_status_bar()
 
     def _get_cpu_usage(self):
+        proc_stat = Path("/proc/stat")
+        if sys.platform != "linux" or not proc_stat.exists():
+            return 0
+
         try:
-            with open("/proc/stat", "r") as f:
+            with open(proc_stat, "r") as f:
                 line = f.readline()
                 fields = line.split()
                 idle = int(fields[4])
@@ -946,13 +1107,25 @@ class KioskMainWindow(QMainWindow):
             return 0
 
     def _on_sdr_status(self, status: str, sample_rate: float):
+        self._logger.info("SDR status update: %s (SR %.2f)", status, sample_rate)
         self._sdr_status = status
         self._sdr_sample_rate = sample_rate
         self._render_status_bar()
 
-    def _on_recording_status(self, status: str, start_time: float):
-        if status == "ACTIVE":
-            self._recording_start = start_time
+    def _on_sdr_connection_changed(self, _connected: bool) -> None:
+        """Handle SDR connection state changes."""
+        self._update_button_states()
+
+    def _update_status_sdr(self, status_text: str) -> None:
+        """Update SDR field in status bar."""
+        self._sdr_status = status_text
+        self._render_status_bar()
+
+    def _on_recording_status(self, status: dict):
+        """Handle recording status updates from SDR worker."""
+        if status.get("recording"):
+            elapsed = status.get("duration_sec", 0)
+            self._recording_start = time.time() - elapsed
         else:
             self._recording_start = None
         self._render_status_bar()
@@ -980,18 +1153,24 @@ class KioskMainWindow(QMainWindow):
         else:
             cpu_color = "#00FF41"
 
-        if self._sdr_status == "ACTIVE":
+        if "ACTIVE" in self._sdr_status:
             sdr_text = f"SDR: ACTIVE @ {self._sdr_sample_rate / 1e6:.1f} MSPS"
             sdr_color = "#00FF41"
-        elif self._sdr_status == "IDLE":
+        elif "IDLE" in self._sdr_status or "CONNECTING" in self._sdr_status:
             sdr_text = "SDR: IDLE"
+            sdr_color = "#00CC33"
+        elif "DISCONNECTED" in self._sdr_status:
+            sdr_text = "SDR: DISCONNECTED"
+            sdr_color = "#FFB000"
+        elif "NOT AVAILABLE" in self._sdr_status:
+            sdr_text = "SDR: NOT AVAILABLE"
             sdr_color = "#006B1F"
-        elif self._sdr_status == "ERROR":
+        elif "ERROR" in self._sdr_status:
             sdr_text = "SDR: ERROR"
             sdr_color = "#FF0000"
         else:
-            sdr_text = "SDR: DISCONNECTED"
-            sdr_color = "#FFB000"
+            sdr_text = self._sdr_status
+            sdr_color = "#FF0000"
 
         html = (
             f"<span style='color:#00FF41'>TIME: {now_text}</span>"
@@ -1011,6 +1190,9 @@ class KioskMainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Prevent the window from being closed."""
+        if getattr(self, "_allow_close", False):
+            event.accept()
+            return
         event.ignore()
 
     def keyPressEvent(self, event):
@@ -1084,7 +1266,6 @@ def main():
     """Application entry point."""
     app = QApplication(sys.argv)
     app.setApplicationName("RF Tactical Monitor")
-    app.setOverrideCursor(QCursor(Qt.BlankCursor))
 
     stylesheet_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "config", "theme.qss"

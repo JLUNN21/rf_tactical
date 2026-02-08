@@ -4,6 +4,8 @@ Modal, touch-friendly settings dialog with persistence.
 """
 
 import os
+import sys
+from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QDialog,
@@ -38,7 +40,11 @@ class SettingsDialog(QDialog):
         self.setMinimumSize(740, 440)
 
         self._config = config
-        self._backlight_path = "/sys/class/backlight/rpi_backlight/brightness"
+        if sys.platform == "linux":
+            backlight_path = Path("/sys/class/backlight/rpi_backlight/brightness")
+            self._backlight_path = backlight_path if backlight_path.exists() else None
+        else:
+            self._backlight_path = None
 
         self._build_ui()
         self._load_from_config()
@@ -179,15 +185,17 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(group)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("BRIGHTNESS"))
+        self.brightness_label = QLabel("BRIGHTNESS")
+        row.addWidget(self.brightness_label)
         self.brightness_slider = QSlider(Qt.Horizontal)
         self.brightness_slider.setRange(0, 255)
         self.brightness_slider.setMinimumHeight(44)
         row.addWidget(self.brightness_slider, 1)
         layout.addLayout(row)
 
-        if not os.path.exists(self._backlight_path):
+        if self._backlight_path is None:
             self.brightness_slider.setEnabled(False)
+            self.brightness_label.setText("Brightness (not available)")
 
         row = QHBoxLayout()
         row.addWidget(QLabel("COLORMAP"))
@@ -234,7 +242,7 @@ class SettingsDialog(QDialog):
 
     def _apply_backlight(self, value: int) -> None:
         """Apply brightness to backlight file if available."""
-        if not os.path.exists(self._backlight_path):
+        if self._backlight_path is None or not os.path.exists(self._backlight_path):
             return
         try:
             with open(self._backlight_path, "w", encoding="utf-8") as fh:

@@ -88,23 +88,76 @@ class SDRWorker(QObject):
         self._logger = setup_logger(__name__)
 
     def _open_device(self) -> bool:
-        """Open HackRF via SoapySDR and configure parameters."""
+        """Open HackRF device via SoapySDR with multiple fallback strategies."""
         if not SDR_AVAILABLE:
-            self._logger.error("SoapySDR not available")
+            self._logger.error("Cannot open device - SoapySDR not available")
             self.error_occurred.emit("SDR OFFLINE")
             self.connection_status.emit("DISCONNECTED", 0.0)
             return False
 
+        # Try multiple strategies to open the device
+        self._sdr = None
+        
+        # Strategy 1: Try with driver="hackrf"
+        self._logger.info("Strategy 1: Opening with driver='hackrf'")
+        try:
+            self._sdr = SoapySDR.Device(dict(driver="hackrf"))
+            if self._sdr is not None:
+                self._logger.info("[OK] Strategy 1 succeeded")
+                return self._configure_device()
+        except Exception as e:
+            self._logger.warning("Strategy 1 failed: %s", e)
+            self._sdr = None
+        
+        # Strategy 2: Try with driver="hackrf" and enumerate to get serial
+        self._logger.info("Strategy 2: Enumerating to find device with serial number")
         try:
             results = SoapySDR.Device.enumerate("driver=hackrf")
-            if len(results) == 0:
-                self._logger.error("HackRF not found")
-                self.error_occurred.emit("HackRF not found — no SoapySDR devices detected")
-                self.connection_status.emit("DISCONNECTED", 0.0)
-                return False
+            if results:
+                self._logger.info("Found %d HackRF device(s) via enumeration", len(results))
+                # Try first device with full args
+                device_args = results[0]
+                self._logger.info("Trying to open with args: %s", device_args)
+                self._sdr = SoapySDR.Device(device_args)
+                if self._sdr is not None:
+                    self._logger.info("[OK] Strategy 2 succeeded")
+                    return self._configure_device()
+        except Exception as e:
+            self._logger.warning("Strategy 2 failed: %s", e)
+            self._sdr = None
+        
+        # Strategy 3: Try with empty args (let SoapySDR auto-detect)
+        self._logger.info("Strategy 3: Opening with empty args (auto-detect)")
+        try:
+            self._sdr = SoapySDR.Device()
+            if self._sdr is not None:
+                self._logger.info("[OK] Strategy 3 succeeded")
+                return self._configure_device()
+        except Exception as e:
+            self._logger.warning("Strategy 3 failed: %s", e)
+            self._sdr = None
+        
+        # All strategies failed
+        error_msg = "Failed to open HackRF with all strategies"
+        self._logger.error(error_msg)
+        self._logger.error("Possible causes:")
+        self._logger.error("  1. Device is in use by another program (SDR#, GQRX, etc.)")
+        self._logger.error("  2. USB driver is incorrect - use Zadig to install WinUSB driver")
+        self._logger.error("  3. Insufficient USB permissions")
+        self._logger.error("  4. Device is not properly connected")
+        self.error_occurred.emit("Failed to open HackRF: " + error_msg)
+        self.connection_status.emit("ERROR", 0.0)
+        return False
 
-            self._sdr = SoapySDR.Device(dict(driver="hackrf"))
-
+    def _configure_device(self) -> bool:
+        """Configure the opened SDR device."""
+        try:
+            self._logger.info("Configuring SDR device...")
+            self._logger.info("  Center freq: %.3f MHz", self._center_freq / 1e6)
+            self._logger.info("  Sample rate: %.3f MSPS", self._sample_rate / 1e6)
+            self._logger.info("  LNA gain: %d dB", self._gain_lna)
+            self._logger.info("  VGA gain: %d dB", self._gain_vga)
+            
             self._sdr.setSampleRate(SOAPY_SDR_RX, 0, self._sample_rate)
             self._sdr.setFrequency(SOAPY_SDR_RX, 0, self._center_freq)
             self._sdr.setGain(SOAPY_SDR_RX, 0, "LNA", self._gain_lna)
@@ -112,6 +165,9 @@ class SDRWorker(QObject):
             self._sdr.setAntenna(SOAPY_SDR_RX, 0, "TX/RX")
 
             self._stream = self._sdr.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32, [0])
+            if self._stream is None:
+                raise RuntimeError("Failed to setup RX stream")
+
             self._sdr.activateStream(self._stream)
 
             info_str = (
@@ -122,14 +178,22 @@ class SDRWorker(QObject):
             )
             self.device_connected.emit(info_str)
             self.connection_status.emit("IDLE", self._sample_rate)
+            self._logger.info("HackRF device opened successfully")
             return True
 
         except Exception as exc:
-            self._logger.exception("HackRF open failed")
-            self.error_occurred.emit(f"HackRF open failed: {exc}")
+            error_msg = f"Failed to open HackRF: {exc}"
+            self._logger.error(error_msg)
+            self.error_occurred.emit(error_msg)
             self.connection_status.emit("ERROR", 0.0)
-            self._sdr = None
+
+            if self._stream is not None and self._sdr is not None:
+                try:
+                    self._sdr.closeStream(self._stream)
+                except Exception:
+                    pass
             self._stream = None
+            self._sdr = None
             return False
 
     def _close_device(self):

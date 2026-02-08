@@ -4,6 +4,10 @@ Manages the QThread lifecycle for the SDRWorker, providing
 start/stop/retune controls from the main GUI thread.
 """
 
+import logging
+import os
+from pathlib import Path
+
 try:
     import SoapySDR
     SDR_AVAILABLE = True
@@ -14,6 +18,78 @@ from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from radio.sdr_worker import SDRWorker
 from radio.iq_player import IQPlayer
+
+
+# Module-level logger for environment verification
+_logger = logging.getLogger(__name__)
+
+
+def _verify_soapy_environment():
+    """Verify SoapySDR environment is correctly configured."""
+    _logger.info("=" * 60)
+    _logger.info("SoapySDR Environment Verification")
+    _logger.info("=" * 60)
+    
+    # Check SOAPY_SDR_PLUGIN_PATH environment variable
+    plugin_path = os.environ.get('SOAPY_SDR_PLUGIN_PATH', None)
+    
+    if plugin_path:
+        _logger.info("SOAPY_SDR_PLUGIN_PATH is set: %s", plugin_path)
+        
+        # Check if path exists
+        plugin_dir = Path(plugin_path)
+        if plugin_dir.exists():
+            _logger.info("✓ Plugin directory exists")
+            
+            # List modules in directory
+            dll_modules = list(plugin_dir.glob("*.dll"))
+            so_modules = list(plugin_dir.glob("*.so"))
+            all_modules = dll_modules + so_modules
+            
+            _logger.info("Found %d SoapySDR module(s):", len(all_modules))
+            for mod in all_modules:
+                _logger.info("  - %s", mod.name)
+            
+            # Check specifically for HackRF module
+            hackrf_modules = [m for m in all_modules if 'hackrf' in m.name.lower()]
+            if hackrf_modules:
+                _logger.info("✓ HackRF module found: %s", hackrf_modules[0].name)
+            else:
+                _logger.warning("✗ No HackRF module found in plugin directory!")
+                _logger.warning("Available modules: %s", [m.name for m in all_modules])
+                _logger.warning("You may need to install SoapyHackRF:")
+                _logger.warning("  conda install -c conda-forge soapysdr-module-hackrf")
+        else:
+            _logger.error("✗ Plugin directory does NOT exist: %s", plugin_path)
+            _logger.error("Check that radioconda is installed correctly")
+    else:
+        _logger.warning("SOAPY_SDR_PLUGIN_PATH is NOT set!")
+        _logger.info("SoapySDR will use default search paths")
+        _logger.info("This may work, but setting the path is recommended")
+    
+    # Check SoapySDR module itself
+    if SDR_AVAILABLE:
+        try:
+            _logger.info("SoapySDR Python module info:")
+            _logger.info("  Module path: %s", SoapySDR.__file__)
+            _logger.info("  API version: %s", SoapySDR.getAPIVersion())
+            _logger.info("  ABI version: %s", SoapySDR.getABIVersion())
+            _logger.info("  Lib version: %s", SoapySDR.getLibVersion())
+            
+            # Check for enumerate function
+            if hasattr(SoapySDR.Device, 'enumerate'):
+                _logger.info("✓ SoapySDR.Device.enumerate is available")
+            else:
+                _logger.error("✗ SoapySDR.Device.enumerate NOT available!")
+        except Exception as e:
+            _logger.error("Error checking SoapySDR module: %s", e)
+    
+    _logger.info("=" * 60)
+
+
+# Call verification when module loads
+if SDR_AVAILABLE:
+    _verify_soapy_environment()
 
 
 class SDRManager(QObject):
@@ -117,7 +193,8 @@ class SDRManager(QObject):
 
     def _on_device_disconnected(self):
         """Handle worker signaling device closed — stop the thread."""
-        self._set_connected(False)
+        # Don't set connected=False here - device is still available
+        # Only the capture session ended
         self.device_disconnected.emit()
         if self._thread is not None and self._thread.isRunning():
             self._thread.quit()
@@ -134,23 +211,43 @@ class SDRManager(QObject):
         self.running_changed.emit(False)
 
     @pyqtSlot()
-    def start(self):
+    def start(
+        self,
+        center_freq: float = None,
+        sample_rate: float = None,
+        lna_gain: int = None,
+        vga_gain: int = None,
+    ):
         """Start SDR capture on a new thread."""
         if self._thread is not None and self._thread.isRunning():
             return
 
+        if center_freq is not None:
+            self._center_freq = center_freq
+        if sample_rate is not None:
+            self._sample_rate = sample_rate
+        if lna_gain is not None:
+            self._gain_lna = lna_gain
+        if vga_gain is not None:
+            self._gain_vga = vga_gain
+
         if not SDR_AVAILABLE:
-            self.error_occurred.emit("SDR OFFLINE")
             self._set_connected(False)
+            self.connection_status.emit("SDR: NOT AVAILABLE", 0.0)
+            logging.warning("Cannot start SDR - SoapySDR not available")
             return
 
-        if not self._is_connected:
-            self._set_connected(self._probe_device())
-        if not self._is_connected:
-            self.error_occurred.emit("HackRF not detected")
+        # Re-probe device before starting (in case it was disconnected)
+        if self._probe_device():
+            self._set_connected(True)
+        else:
+            self._set_connected(False)
+            self.connection_status.emit("SDR: DISCONNECTED", 0.0)
+            logging.warning("Cannot start SDR - No HackRF detected")
             return
 
         self._setup_worker()
+        self.connection_status.emit("SDR: CONNECTING...", self._sample_rate)
         self._thread.start()
         self.capture_started.emit()
         self.running_changed.emit(True)
@@ -288,16 +385,73 @@ class SDRManager(QObject):
     def _on_connection_status(self, status: str, _sample_rate: float) -> None:
         if status in {"ACTIVE", "IDLE"}:
             self._set_connected(True)
-        elif status in {"DISCONNECTED", "ERROR"}:
+        elif status == "ERROR":
+            # Only set disconnected on ERROR, not on normal DISCONNECTED
             self._set_connected(False)
+        # Don't change connection state on DISCONNECTED - device is still available
 
     def _probe_device(self) -> bool:
+        """Probe for available SDR devices with detailed logging."""
         if not SDR_AVAILABLE:
+            logging.info("SoapySDR not available - module not imported")
             return False
+        
         try:
+            # Log SoapySDR version and API
+            logging.info("SoapySDR module imported successfully")
+            try:
+                logging.info("SoapySDR API version: %s", SoapySDR.getAPIVersion())
+                logging.info("SoapySDR ABI version: %s", SoapySDR.getABIVersion())
+                logging.info("SoapySDR lib version: %s", SoapySDR.getLibVersion())
+            except Exception as ver_err:
+                logging.warning("Could not get SoapySDR version info: %s", ver_err)
+            
+            # Enumerate HackRF devices specifically
+            logging.info("Enumerating HackRF devices...")
             results = SoapySDR.Device.enumerate("driver=hackrf")
-            return len(results) > 0
-        except Exception:
+            
+            logging.info("Found %d SoapySDR device(s):", len(results))
+            for i, result in enumerate(results):
+                logging.info("  Device %d: %s", i, result)
+            
+            if len(results) == 0:
+                logging.warning("No SoapySDR devices found at all!")
+                logging.info("This could mean:")
+                logging.info("  1. No SDR hardware is connected")
+                logging.info("  2. SoapySDR modules are not installed")
+                logging.info("  3. USB drivers are not installed (use Zadig on Windows)")
+                return False
+            
+            # Look for HackRF specifically
+            hackrf_found = False
+            hackrf_result = None
+            
+            for result in results:
+                result_str = str(result).lower()
+                logging.debug("Checking device: %s", result_str)
+                
+                if 'hackrf' in result_str:
+                    hackrf_found = True
+                    hackrf_result = result
+                    logging.info("✓ Found HackRF device: %s", result)
+                    break
+            
+            if not hackrf_found:
+                logging.warning("HackRF not found in enumeration results")
+                logging.info("Available devices: %s", [str(r) for r in results])
+                logging.info("Make sure HackRF is plugged in and drivers are installed")
+                return False
+            
+            # Device found via enumeration - that's enough for probe
+            logging.info("✓ HackRF device detected via enumeration")
+            logging.info("  Device will be opened when START is pressed")
+            return True
+            
+        except Exception as exc:
+            logging.error("Error during device enumeration: %s", exc)
+            logging.error("Exception type: %s", type(exc).__name__)
+            import traceback
+            logging.error("Full traceback:\n%s", traceback.format_exc())
             return False
 
     def shutdown(self):

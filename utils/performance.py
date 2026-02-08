@@ -1,6 +1,8 @@
 """RF Tactical Monitor - Performance Monitoring Utilities."""
 
 import os
+import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
@@ -62,12 +64,13 @@ class PerformanceMonitor(QObject):
         Returns:
             Dict mapping cpu label to (idle, total) times.
         """
-        if not os.path.exists("/proc/stat"):
+        proc_stat = Path("/proc/stat")
+        if sys.platform != "linux" or not proc_stat.exists():
             return None
 
         cpu_times: Dict[str, Tuple[int, int]] = {}
         try:
-            with open("/proc/stat", "r", encoding="utf-8") as fh:
+            with open(proc_stat, "r", encoding="utf-8") as fh:
                 for line in fh:
                     if not line.startswith("cpu"):
                         continue
@@ -120,13 +123,14 @@ class PerformanceMonitor(QObject):
 
     def _read_memory_mb(self) -> Optional[int]:
         """Read memory usage in MB from /proc/meminfo."""
-        if not os.path.exists("/proc/meminfo"):
+        meminfo = Path("/proc/meminfo")
+        if sys.platform != "linux" or not meminfo.exists():
             return None
 
         mem_total = None
         mem_available = None
         try:
-            with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+            with open(meminfo, "r", encoding="utf-8") as fh:
                 for line in fh:
                     if line.startswith("MemTotal"):
                         mem_total = int(line.split()[1])
@@ -141,8 +145,8 @@ class PerformanceMonitor(QObject):
 
     def _read_temperature(self) -> Optional[float]:
         """Read CPU temperature from the thermal zone file."""
-        temp_path = "/sys/class/thermal/thermal_zone0/temp"
-        if not os.path.exists(temp_path):
+        temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
+        if sys.platform != "linux" or not temp_path.exists():
             return None
         try:
             with open(temp_path, "r", encoding="utf-8") as fh:
