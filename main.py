@@ -43,16 +43,21 @@ from utils.performance import PerformanceMonitor
 from utils.logger import setup_logger
 from utils.crash_handler import install_crash_handler
 from decoders.adsb_decoder import ADSBDecoderManager
+from decoders.adsb_sdr import ADSBSDRManager
 from decoders.ism_decoder import ISMDecoderManager
 from decoders.wifi_scanner import WiFiScannerManager
 from decoders.ble_scanner import BLEScannerManager
 from decoders.cellular_scanner import CellularScannerManager
 from radio.sdr_manager import SDRManager
 from radio.sdr_manager import SDR_AVAILABLE
+from network.cot_sender import CoTSenderManager
 from utils.config import ConfigManager
+from utils.repetition_detector import RepetitionDetector
+from utils.diagnostic_logger import get_diagnostic_logger, shutdown_diagnostic_logger
+from utils.flow_tracer import get_flow_tracer
 
 
-# Tab name → band key mapping for tabs that use the SDR waterfall
+# Tab name -> band key mapping for tabs that use the SDR waterfall
 TAB_BAND_MAP = {
     "ISM": "ism_433",
     "SCANNER": "ism_433",
@@ -65,8 +70,7 @@ class KioskMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowFlags(Qt.Window)
-        self._cursor_hidden = True
-        self.setCursor(QCursor(Qt.BlankCursor))
+        self._cursor_hidden = False
         self._apply_screen_geometry()
 
         self._config = ConfigManager()
@@ -115,12 +119,13 @@ class KioskMainWindow(QMainWindow):
         self._setup_ble()
         self._setup_cellular()
         self._setup_performance()
+        self._setup_cot()
         self._start_clock()
         self._connect_signals()
         self.showMaximized()
 
     def _build_ui(self):
-        """Construct the full UI layout: status bar → tabs → button bar."""
+        """Construct the full UI layout: status bar -> tabs -> button bar."""
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
 
@@ -163,8 +168,8 @@ class KioskMainWindow(QMainWindow):
         status_frame.setFixedHeight(44)
         status_frame.setStyleSheet(
             "#statusBarFrame {"
-            "  background-color: #0A0A0A;"
-            "  border-bottom: 1px solid #1A3D1A;"
+            "  background-color: #0A0A0F;"
+            "  border-bottom: 1px solid #2D1B4E;"
             "  border-top: none; border-left: none; border-right: none;"
             "}"
         )
@@ -177,7 +182,7 @@ class KioskMainWindow(QMainWindow):
 
         self.status_label = QLabel("TIME: -- | GPS: -- | REC: -- | CPU: -- | SDR: --")
         self.status_label.setFont(sf)
-        self.status_label.setStyleSheet("color: #00CC33; border: none; background: transparent;")
+        self.status_label.setStyleSheet("color: #BB86FC; border: none; background: transparent;")
         self.status_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         status_layout.addWidget(self.status_label, 1)
 
@@ -201,7 +206,7 @@ class KioskMainWindow(QMainWindow):
         sep.setFrameShape(QFrame.VLine)
         sep.setFixedWidth(1)
         sep.setFixedHeight(20)
-        sep.setStyleSheet("background-color: #1A3D1A; border: none;")
+        sep.setStyleSheet("background-color: #2D1B4E; border: none;")
         layout.addWidget(sep)
 
     # ── Tabs ────────────────────────────────────────────────────
@@ -268,7 +273,7 @@ class KioskMainWindow(QMainWindow):
             f"SR: {band.sample_rate_hz / 1e6:.1f} Msps"
         )
         freq_label.setFont(QFont("Source Code Pro", 10, QFont.Bold))
-        freq_label.setStyleSheet("color: #00FF41; border: none; background: transparent;")
+        freq_label.setStyleSheet("color: #D4A0FF; border: none; background: transparent;")
         freq_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         freq_label.setFixedHeight(20)
         layout.addWidget(freq_label)
@@ -305,7 +310,7 @@ class KioskMainWindow(QMainWindow):
             f"SR: {band.sample_rate_hz / 1e6:.1f} Msps"
         )
         freq_label.setFont(QFont("Source Code Pro", 10, QFont.Bold))
-        freq_label.setStyleSheet("color: #00FF41; border: none; background: transparent;")
+        freq_label.setStyleSheet("color: #D4A0FF; border: none; background: transparent;")
         freq_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         freq_label.setFixedHeight(20)
         layout.addWidget(freq_label)
@@ -344,7 +349,7 @@ class KioskMainWindow(QMainWindow):
             f"SR: {band.sample_rate_hz / 1e6:.1f} Msps"
         )
         freq_label.setFont(QFont("Source Code Pro", 10, QFont.Bold))
-        freq_label.setStyleSheet("color: #00FF41; border: none; background: transparent;")
+        freq_label.setStyleSheet("color: #D4A0FF; border: none; background: transparent;")
         freq_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         freq_label.setFixedHeight(20)
         layout.addWidget(freq_label)
@@ -380,7 +385,7 @@ class KioskMainWindow(QMainWindow):
             f"SR: {band.sample_rate_hz / 1e6:.1f} Msps"
         )
         freq_label.setFont(QFont("Source Code Pro", 10, QFont.Bold))
-        freq_label.setStyleSheet("color: #00FF41; border: none; background: transparent;")
+        freq_label.setStyleSheet("color: #D4A0FF; border: none; background: transparent;")
         freq_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         freq_label.setFixedHeight(20)
         layout.addWidget(freq_label)
@@ -424,8 +429,8 @@ class KioskMainWindow(QMainWindow):
         button_frame.setFixedHeight(56)
         button_frame.setStyleSheet(
             "#buttonBarFrame {"
-            "  background-color: #0A0A0A;"
-            "  border-top: 1px solid #1A3D1A;"
+            "  background-color: #0A0A0F;"
+            "  border-top: 1px solid #2D1B4E;"
             "  border-bottom: none; border-left: none; border-right: none;"
             "}"
         )
@@ -471,6 +476,9 @@ class KioskMainWindow(QMainWindow):
         )
 
         self._sdr_manager.new_waterfall_row.connect(self._on_waterfall_row)
+        self._sdr_manager.spectrum_stats_updated.connect(self._on_spectrum_stats)
+        self._sdr_manager.signal_event_detected.connect(self._on_signal_event_detected)
+        self._sdr_manager.signal_event_closed.connect(self._on_signal_event_closed)
         self._sdr_manager.overflow_count_updated.connect(self._on_overflow_count)
         self._sdr_manager.error_occurred.connect(self._on_sdr_error)
         self._sdr_manager.device_connected.connect(self._on_sdr_connected)
@@ -482,6 +490,17 @@ class KioskMainWindow(QMainWindow):
         self._sdr_manager.connection_changed.connect(self._on_sdr_connection_changed)
         self._sdr_manager.running_changed.connect(lambda _: self._update_button_states())
         self._update_button_states()
+        
+        # Connect SDR manager to ISM view for signal detection
+        if self._ism_view is not None:
+            self._ism_view.set_sdr_manager(self._sdr_manager)
+
+        # Initialize RepetitionDetector for grouping repeated ISM transmissions
+        self._repetition_detector = RepetitionDetector(window_ms=150, similarity_threshold=0.8)
+
+        # Spectrum stats for status bar display
+        self._last_noise_floor = -120.0
+        self._last_peak_power = -120.0
 
         self._logger.info("SDR available: %s", SDR_AVAILABLE)
 
@@ -491,21 +510,32 @@ class KioskMainWindow(QMainWindow):
             self._update_status_sdr("SDR: NOT AVAILABLE")
 
     def _setup_adsb(self):
-        """Initialize the ADS-B decoder manager and wire up signals."""
-        self._adsb_manager = ADSBDecoderManager()
+        """Initialize the ADS-B decoder manager and wire up signals.
+        
+        Uses ADSBSDRManager (direct HackRF IQ decode) when SDR is available,
+        falls back to ADSBDecoderManager (dump1090 network mode) otherwise.
+        """
+        if SDR_AVAILABLE:
+            self._logger.info("ADS-B: Using HackRF direct SDR decoder (1090 MHz)")
+            self._adsb_manager = ADSBSDRManager()
+            self._adsb_mode = "sdr"
+        else:
+            self._logger.info("ADS-B: Using network decoder (dump1090 Beast/SBS)")
+            self._adsb_manager = ADSBDecoderManager()
+            self._adsb_mode = "network"
 
         if self._adsb_view is not None:
             self._adsb_manager.aircraft_updated.connect(self._adsb_view.update_aircraft)
             self._adsb_manager.decoder_started.connect(self._adsb_view.set_status)
             self._adsb_manager.decoder_stopped.connect(lambda: self._adsb_view.set_status("ADS-B DECODER STOPPED"))
             self._adsb_manager.error_occurred.connect(self._on_adsb_error)
+            # Wire stats if SDR mode
+            if hasattr(self._adsb_manager, 'stats_updated'):
+                self._adsb_manager.stats_updated.connect(self._on_adsb_stats)
         
-        # Auto-start ADS-B decoder on launch (Linux only)
-        if sys.platform == "linux":
-            QTimer.singleShot(2000, lambda: self._adsb_manager.start(
-                center_freq=1090000000,
-                sample_rate=2000000
-            ))
+        # Update button states when decoder starts/stops
+        self._adsb_manager.decoder_started.connect(lambda _: self._update_button_states())
+        self._adsb_manager.decoder_stopped.connect(self._update_button_states)
 
     def _setup_ism(self):
         """Initialize the ISM decoder manager and wire up signals."""
@@ -583,6 +613,12 @@ class KioskMainWindow(QMainWindow):
         self._scanner_view.lna_slider.valueChanged.connect(self._on_scanner_lna_changed)
         self._scanner_view.vga_slider.valueChanged.connect(self._on_scanner_vga_changed)
 
+        # Wire scanner TX button -> SDR worker generate_and_transmit
+        self._scanner_view.tx_requested.connect(self._on_scanner_tx_requested)
+
+        # Wire scanner demod mode change
+        self._scanner_view.demod_mode_changed.connect(self._on_demod_mode_changed)
+
         self._active_tab = self._get_current_tab_name()
 
         self._fps_timer.start()
@@ -596,9 +632,28 @@ class KioskMainWindow(QMainWindow):
     # ── Tab Switching ───────────────────────────────────────────
 
     def _on_tab_changed(self, index):
-        """Handle tab switch — retune SDR if the new tab has a waterfall."""
+        """Handle tab switch -- retune SDR if the new tab has a waterfall."""
         tab_name = self.tab_widget.tabText(index)
         self._active_tab = tab_name
+        
+        # Set flow tracer context based on active tab
+        flow = get_flow_tracer()
+        if tab_name == "ISM":
+            flow.set_context("ISM")
+            flow.check_antenna("ISM", 433.92e6)
+        elif tab_name == "ADS-B":
+            flow.set_context("ADSB")
+            flow.check_antenna("ADSB", 1090e6)
+        elif tab_name == "WI-FI/BLE":
+            flow.set_context("WIFI")
+            flow.check_antenna("WIFI", 2.4e9)
+        elif tab_name == "CELLULAR":
+            flow.set_context("CELLULAR")
+            flow.check_antenna("CELLULAR", 1800e6)
+        elif tab_name == "SCANNER":
+            flow.set_context("SCANNER")
+        
+        self._logger.info("Tab changed to: %s", tab_name)
 
         if tab_name == "ADS-B" and self._sdr_manager is not None and self._sdr_manager.is_running:
             self._sdr_manager.stop()
@@ -638,6 +693,7 @@ class KioskMainWindow(QMainWindow):
 
             self._update_freq_label(tab_name, center_freq, sample_rate)
 
+        self._update_button_states()
         self._animate_tab_swipe()
 
     def _update_freq_label(self, tab_name, center_freq, sample_rate):
@@ -688,8 +744,19 @@ class KioskMainWindow(QMainWindow):
         """Handle ADS-B decoder errors and log to LOGS tab."""
         self._logger.error(f"ADS-B: {msg}")
         if self._adsb_view is not None:
-            self._adsb_view.set_status("DECODER OFFLINE")
-            self._adsb_view.set_amber_warning("DECODER OFFLINE")
+            # Show the actual error message, not just generic "OFFLINE"
+            self._adsb_view.set_amber_warning(msg)
+
+    def _on_adsb_stats(self, stats: dict) -> None:
+        """Handle ADS-B SDR decoder statistics (msg rate, totals)."""
+        if self._adsb_view is not None:
+            msg_rate = stats.get("msg_rate", 0)
+            total = stats.get("total_msgs", 0)
+            crc_pass = stats.get("total_crc_pass", 0)
+            count = stats.get("aircraft_count", 0)
+            self._adsb_view.set_status(
+                f"ADS-B LIVE -- {count} aircraft | {msg_rate:.0f} msg/s | {crc_pass} valid"
+            )
 
     def _on_ism_error(self, msg: str) -> None:
         """Handle ISM decoder errors and log to LOGS tab."""
@@ -754,7 +821,14 @@ class KioskMainWindow(QMainWindow):
             if self._adsb_manager is not None and not self._adsb_manager.is_running:
                 if self._sdr_manager is not None and self._sdr_manager.is_running:
                     self._sdr_manager.stop()
-                self._logger.info("Starting ADS-B decoder at 1090 MHz")
+                if getattr(self, '_adsb_mode', 'network') == 'sdr':
+                    self._logger.info("Starting ADS-B decoder (HackRF direct 1090 MHz)")
+                    if self._adsb_view is not None:
+                        self._adsb_view.set_status("TUNING HACKRF TO 1090 MHz...")
+                else:
+                    self._logger.info("Starting ADS-B decoder (network mode: Beast/SBS)")
+                    if self._adsb_view is not None:
+                        self._adsb_view.set_status("CONNECTING TO ADS-B FEED...")
                 self._adsb_manager.start()
             return
 
@@ -800,29 +874,34 @@ class KioskMainWindow(QMainWindow):
             self._sdr_manager.start()
 
     def _on_stop(self):
-        """Stop SDR capture."""
+        """Stop all active decoders/SDR (non-blocking)."""
         self._logger.info("STOP button pressed")
         
-        if self._sdr_manager is not None:
+        # All stop() calls are non-blocking -- they signal threads to stop
+        # and the threads clean up asynchronously via signals.
+        if self._sdr_manager is not None and self._sdr_manager.is_running:
             self._logger.info("Stopping SDR manager")
             self._sdr_manager.stop()
-        if self._adsb_manager is not None:
+        if self._adsb_manager is not None and self._adsb_manager.is_running:
             self._logger.info("Stopping ADS-B decoder")
             self._adsb_manager.stop()
-        if self._ism_manager is not None:
+        if self._ism_manager is not None and self._ism_manager.is_running:
             self._logger.info("Stopping ISM decoder")
             self._ism_manager.stop()
-        if self._wifi_manager is not None:
+        if self._wifi_manager is not None and self._wifi_manager.is_running:
             self._logger.info("Stopping Wi-Fi scanner")
             self._wifi_manager.stop()
-        if self._ble_manager is not None:
+        if self._ble_manager is not None and self._ble_manager.is_running:
             self._logger.info("Stopping BLE scanner")
             self._ble_manager.stop()
-        if self._cellular_manager is not None:
+        if self._cellular_manager is not None and self._cellular_manager.is_running:
             self._logger.info("Stopping cellular scanner")
             self._cellular_manager.stop()
         
         self._update_button_states()
+        # Re-check button states after delays (threads stop asynchronously)
+        QTimer.singleShot(500, self._update_button_states)
+        QTimer.singleShot(2000, self._update_button_states)
 
     def _on_scan(self):
         """Handle SCAN button actions by tab context."""
@@ -843,7 +922,12 @@ class KioskMainWindow(QMainWindow):
         self._logger.info("MARK: %s @ %.3f MHz", timestamp, freq / 1e6)
 
     def _update_button_states(self):
-        """Update button enabled/disabled states and visual feedback based on SDR status."""
+        """Update button enabled/disabled states and visual feedback based on SDR status.
+        
+        START is always enabled -- non-SDR tabs (ADS-B, Wi-Fi/BLE, Cellular) use
+        their own decoders/scanners and don't need HackRF hardware.
+        SDR-dependent tabs (ISM, Scanner) will show an error if SDR is unavailable.
+        """
         # Get SDR state
         if self._sdr_manager is None:
             sdr_connected = False
@@ -852,20 +936,39 @@ class KioskMainWindow(QMainWindow):
             sdr_connected = self._sdr_manager.is_connected()
             sdr_running = self._sdr_manager.is_running
         
-        # Log state changes for debugging (use INFO so it shows in LOGS tab)
-        self._logger.info("Button state update: SDR_AVAILABLE=%s, connected=%s, running=%s", 
-                          SDR_AVAILABLE, sdr_connected, sdr_running)
+        # Check if any decoder/scanner is running (for non-SDR tabs)
+        any_decoder_running = (
+            (self._adsb_manager is not None and self._adsb_manager.is_running) or
+            (self._wifi_manager is not None and self._wifi_manager.is_running) or
+            (self._ble_manager is not None and self._ble_manager.is_running) or
+            (self._cellular_manager is not None and self._cellular_manager.is_running)
+        )
         
-        # START: enabled if SDR available, connected, and not running
-        start_enabled = SDR_AVAILABLE and sdr_connected and not sdr_running
-        self.buttons["startButton"].setEnabled(start_enabled)
-        if start_enabled:
-            self._set_button_style("startButton", "#00FF41", "#00FF41")  # Bright green
+        # Determine if current tab needs SDR hardware
+        tab = self._active_tab or ""
+        sdr_tab = tab in ("ISM", "SCANNER")
+        non_sdr_tab = tab in ("ADS-B", "WI-FI/BLE", "CELLULAR")
+        
+        # START: enabled for non-SDR tabs always, for SDR tabs only if SDR available
+        if non_sdr_tab:
+            start_enabled = not any_decoder_running and not sdr_running
+        elif sdr_tab:
+            start_enabled = SDR_AVAILABLE and sdr_connected and not sdr_running
         else:
-            self._set_button_style("startButton", "#006B1F", "#003310")  # Dark green
+            start_enabled = False  # LOGS tab -- nothing to start
         
-        # STOP: enabled if SDR running
-        stop_enabled = sdr_running
+        self.buttons["startButton"].setEnabled(start_enabled)
+        # Debug: print button state to console
+        print(f"[BTN] tab={tab!r} sdr_tab={sdr_tab} non_sdr={non_sdr_tab} "
+              f"sdr_conn={sdr_connected} sdr_run={sdr_running} "
+              f"dec_run={any_decoder_running} START={start_enabled}")
+        if start_enabled:
+            self._set_button_style("startButton", "#D4A0FF", "#D4A0FF")  # Bright purple
+        else:
+            self._set_button_style("startButton", "#6C3483", "#3D1F5C")  # Dark purple
+        
+        # STOP: enabled if SDR running or any decoder running
+        stop_enabled = sdr_running or any_decoder_running
         self.buttons["stopButton"].setEnabled(stop_enabled)
         if stop_enabled:
             self._set_button_style("stopButton", "#FF0000", "#FF0000")  # Bright red
@@ -890,7 +993,7 @@ class KioskMainWindow(QMainWindow):
         
         # CONFIG: always enabled
         self.buttons["configButton"].setEnabled(True)
-        self._set_button_style("configButton", "#00CC33", "#00CC33")  # Always bright green
+        self._set_button_style("configButton", "#BB86FC", "#BB86FC")  # Always purple
 
     def _set_button_style(self, button_key: str, enabled_color: str, disabled_color: str) -> None:
         """Set button color style for enabled and disabled states.
@@ -953,8 +1056,8 @@ class KioskMainWindow(QMainWindow):
         else:
             self._status_frame.setStyleSheet(
                 "#statusBarFrame {"
-                "  background-color: #0A0A0A;"
-                "  border-bottom: 1px solid #1A3D1A;"
+                "  background-color: #0A0A0F;"
+                "  border-bottom: 1px solid #2D1B4E;"
                 "  border-top: none; border-left: none; border-right: none;"
                 "}"
             )
@@ -1052,6 +1155,141 @@ class KioskMainWindow(QMainWindow):
         if self._active_tab == "SCANNER" and self._sdr_manager is not None:
             self._sdr_manager.set_gains(self._scanner_view.lna_slider.value(), snapped)
 
+    # ── Scanner TX & Demod Handlers ─────────────────────────────
+
+    def _on_scanner_tx_requested(self, mode: str, params: dict):
+        """Handle TX request from scanner view -- route to SDR worker."""
+        if self._sdr_manager is None or not self._sdr_manager.is_running:
+            self._logger.warning("TX requested but SDR not running")
+            return
+
+        freq_hz = params.get("frequency_hz", self._scanner_view.start_spin.value() * 1e6)
+        duration = params.get("duration_sec", 1.0)
+
+        self._logger.info("TX requested: mode=%s, freq=%.3f MHz, dur=%.1fs", mode, freq_hz / 1e6, duration)
+
+        try:
+            worker = self._sdr_manager._worker
+            if worker is not None:
+                worker.generate_and_transmit(
+                    mode=mode,
+                    center_freq=freq_hz,
+                    duration_sec=duration,
+                    sample_rate=2e6,
+                    tx_gain=30,
+                )
+        except Exception as e:
+            self._logger.error("TX failed: %s", e)
+
+    def _on_demod_mode_changed(self, mode: str):
+        """Handle demod mode change from scanner view."""
+        self._logger.info("Demod mode changed to: %s", mode)
+        # Demod audio output is a future enhancement -- log for now
+        # When implemented, this will pipe IQ through DemodulatorV2 -> audio
+
+    # ── Spectrum Stats & V2 Event Handlers ──────────────────────
+
+    def _on_spectrum_stats(self, stats):
+        """Handle spectrum stats from SpectrumAnalyzer (noise floor, peak, etc.)."""
+        try:
+            self._last_noise_floor = stats.noise_floor_db
+            self._last_peak_power = stats.peak_power_db
+
+            # Update overlay traces on active waterfall (every stats update)
+            if self._active_tab in self._waterfalls and self._sdr_manager is not None:
+                worker = getattr(self._sdr_manager, '_worker', None)
+                if worker is not None:
+                    analyzer = worker.spectrum_analyzer
+                    self._waterfalls[self._active_tab].update_overlay_traces(
+                        peak_hold_max=analyzer.peak_hold_max,
+                        average=analyzer.average,
+                        min_hold=analyzer.peak_hold_min,
+                        baseline=analyzer.baseline,
+                    )
+        except Exception:
+            pass
+
+    def _on_signal_event_detected(self, event):
+        """Handle V2 signal event detection -- richer data for ISM inspector."""
+        try:
+            if self._ism_view is not None and self._ism_view.signal_inspector is not None:
+                # Convert V2 event to signal_data dict for inspector
+                signal_data = {
+                    "center_freq_hz": event.last_center if hasattr(event, 'last_center') and event.last_center else 0,
+                    "bandwidth_hz": event.bandwidth if hasattr(event, 'bandwidth') and event.bandwidth else 50000,
+                    "power_dbm": event.peak_power if hasattr(event, 'peak_power') else -80,
+                    "peak_power_dbm": event.peak_power if hasattr(event, 'peak_power') else -80,
+                    "duration_sec": event.duration_sec if hasattr(event, 'duration_sec') else 0,
+                    "frequency": event.last_center if hasattr(event, 'last_center') and event.last_center else 0,
+                    "modulation": "Unknown",
+                    "v2_event_id": event.id if hasattr(event, 'id') else "unknown",
+                    "hit_count": event.hit_count if hasattr(event, 'hit_count') else 1,
+                }
+                # Feed through repetition detector
+                if hasattr(self, '_repetition_detector'):
+                    group = self._repetition_detector.add_detection({
+                        "timestamp": time.time(),
+                        "frequency": signal_data.get("center_freq_hz", 0),
+                        "power": signal_data.get("power_dbm", -80),
+                        "duration": signal_data.get("duration_sec", 0),
+                        "pattern": "",
+                    })
+                    if group:
+                        signal_data["repetition_count"] = group.get("repetition_count", 1)
+                        signal_data["is_grouped"] = True
+        except Exception as e:
+            self._logger.debug("V2 event handler error: %s", e)
+
+    def _on_signal_event_closed(self, event):
+        """Handle V2 signal event closure -- log final event stats."""
+        try:
+            freq = event.last_center / 1e6 if hasattr(event, 'last_center') and event.last_center else 0
+            dur = event.duration_sec if hasattr(event, 'duration_sec') else 0
+            hits = event.hit_count if hasattr(event, 'hit_count') else 0
+            self._logger.info("V2 event closed: %.3f MHz, dur=%.3fs, hits=%d", freq, dur, hits)
+
+            # Feed to CoT sender if ATAK enabled
+            if hasattr(self, '_cot_manager') and self._cot_manager is not None:
+                self._cot_manager.update_sensors({
+                    f"rf-{event.id if hasattr(event, 'id') else 'unknown'}": {
+                        "uid": f"rf-{event.id if hasattr(event, 'id') else 'unknown'}",
+                        "callsign": f"RF-{freq:.1f}MHz",
+                        "lat": 0.0,  # Would need GPS
+                        "lon": 0.0,
+                        "remarks": f"RF signal at {freq:.3f} MHz, {dur:.1f}s, {hits} hits",
+                    }
+                })
+        except Exception as e:
+            self._logger.debug("V2 event closed handler error: %s", e)
+
+    # ── CoT / ATAK Integration ──────────────────────────────────
+
+    def _setup_cot(self):
+        """Initialize CoT sender for ATAK integration."""
+        if not self._config.atak.enabled:
+            self._cot_manager = None
+            self._logger.info("ATAK/CoT disabled in config")
+            return
+
+        self._cot_manager = CoTSenderManager(
+            multicast_group=self._config.atak.cot_multicast_group,
+            multicast_port=self._config.atak.cot_multicast_port,
+            poll_interval=5.0,
+            enabled=True,
+        )
+        self._cot_manager.error_occurred.connect(lambda msg: self._logger.error("CoT: %s", msg))
+        self._cot_manager.sender_started.connect(lambda msg: self._logger.info("CoT: %s", msg))
+        self._cot_manager.sender_stopped.connect(lambda: self._logger.info("CoT sender stopped"))
+
+        # Wire ADS-B aircraft data to CoT sender
+        if self._adsb_manager is not None:
+            self._adsb_manager.aircraft_updated.connect(self._cot_manager.update_aircraft)
+
+        self._cot_manager.start()
+        self._logger.info("CoT sender started -> %s:%d",
+                         self._config.atak.cot_multicast_group,
+                         self._config.atak.cot_multicast_port)
+
     # ── Clock ───────────────────────────────────────────────────
 
     def _start_clock(self):
@@ -1134,15 +1372,15 @@ class KioskMainWindow(QMainWindow):
         now_text = datetime.now(timezone.utc).strftime("%H:%M:%S Z")
 
         gps_text = f"GPS: {self._gps_status}"
-        gps_color = "#00FF41" if self._gps_status == "LOCK" else "#FFB000" if self._gps_status == "SEARCHING" else "#006B1F"
+        gps_color = "#D4A0FF" if self._gps_status == "LOCK" else "#FFB000" if self._gps_status == "SEARCHING" else "#6C3483"
 
         if self._recording_start:
             elapsed = int(time.time() - self._recording_start)
             rec_text = f"REC: {elapsed // 3600:02d}:{(elapsed % 3600) // 60:02d}:{elapsed % 60:02d}"
-            rec_color = "#00FF41"
+            rec_color = "#D4A0FF"
         else:
             rec_text = "REC: IDLE"
-            rec_color = "#006B1F"
+            rec_color = "#6C3483"
 
         cpu_percent = self._cpu_percent
         cpu_text = f"CPU: {cpu_percent}%"
@@ -1151,20 +1389,20 @@ class KioskMainWindow(QMainWindow):
         elif cpu_percent > 70:
             cpu_color = "#FFB000"
         else:
-            cpu_color = "#00FF41"
+            cpu_color = "#D4A0FF"
 
         if "ACTIVE" in self._sdr_status:
             sdr_text = f"SDR: ACTIVE @ {self._sdr_sample_rate / 1e6:.1f} MSPS"
-            sdr_color = "#00FF41"
+            sdr_color = "#D4A0FF"
         elif "IDLE" in self._sdr_status or "CONNECTING" in self._sdr_status:
             sdr_text = "SDR: IDLE"
-            sdr_color = "#00CC33"
+            sdr_color = "#BB86FC"
         elif "DISCONNECTED" in self._sdr_status:
             sdr_text = "SDR: DISCONNECTED"
             sdr_color = "#FFB000"
         elif "NOT AVAILABLE" in self._sdr_status:
             sdr_text = "SDR: NOT AVAILABLE"
-            sdr_color = "#006B1F"
+            sdr_color = "#6C3483"
         elif "ERROR" in self._sdr_status:
             sdr_text = "SDR: ERROR"
             sdr_color = "#FF0000"
@@ -1173,14 +1411,14 @@ class KioskMainWindow(QMainWindow):
             sdr_color = "#FF0000"
 
         html = (
-            f"<span style='color:#00FF41'>TIME: {now_text}</span>"
-            f" <span style='color:#1A3D1A'>|</span> "
+            f"<span style='color:#D4A0FF'>TIME: {now_text}</span>"
+            f" <span style='color:#2D1B4E'>|</span> "
             f"<span style='color:{gps_color}'>{gps_text}</span>"
-            f" <span style='color:#1A3D1A'>|</span> "
+            f" <span style='color:#2D1B4E'>|</span> "
             f"<span style='color:{rec_color}'>{rec_text}</span>"
-            f" <span style='color:#1A3D1A'>|</span> "
+            f" <span style='color:#2D1B4E'>|</span> "
             f"<span style='color:{cpu_color}'>{cpu_text}</span>"
-            f" <span style='color:#1A3D1A'>|</span> "
+            f" <span style='color:#2D1B4E'>|</span> "
             f"<span style='color:{sdr_color}'>{sdr_text}</span>"
         )
 
@@ -1264,6 +1502,10 @@ def load_stylesheet(app, path):
 
 def main():
     """Application entry point."""
+    # Initialize diagnostic logger
+    diag = get_diagnostic_logger()
+    diag.log_component_init("Application", "Starting")
+    
     app = QApplication(sys.argv)
     app.setApplicationName("RF Tactical Monitor")
 
@@ -1272,10 +1514,27 @@ def main():
     )
     load_stylesheet(app, stylesheet_path)
 
-    window = KioskMainWindow()
-    window.show()
+    try:
+        window = KioskMainWindow()
+        window.show()
+    except Exception as e:
+        import traceback
+        print("=" * 60)
+        print("FATAL ERROR DURING STARTUP:")
+        print("=" * 60)
+        traceback.print_exc()
+        print("=" * 60)
+        input("Press Enter to exit...")
+        sys.exit(1)
+    
+    diag.log_component_init("MainWindow", "Ready")
 
-    sys.exit(app.exec_())
+    exit_code = app.exec_()
+    
+    # Cleanup diagnostic logger on exit
+    shutdown_diagnostic_logger()
+    
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

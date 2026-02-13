@@ -3,13 +3,12 @@
 import logging
 import os
 import sys
-from logging.handlers import RotatingFileHandler
 
 
 def setup_logger(name: str = "rf_tactical", debug: bool = False) -> logging.Logger:
     """Configure and return a logger.
 
-    Logs to /var/log/rf_tactical/app.log with rotation.
+    Logs to app.log without rotation (to avoid Windows file locking issues).
     When debug is True, also logs to stdout.
     """
     logger = logging.getLogger(name)
@@ -37,7 +36,9 @@ def setup_logger(name: str = "rf_tactical", debug: bool = False) -> logging.Logg
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
+    # Use simple FileHandler without rotation to avoid Windows file locking issues
+    # The log file will grow indefinitely, but this prevents the PermissionError
+    file_handler = logging.FileHandler(log_file, mode='a', delay=True)
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.DEBUG)
     logger.addHandler(file_handler)

@@ -1,0 +1,83 @@
+Creating KioskMainWindow...
+
+============================================================
+BUTTON DIAGNOSTICS
+============================================================
+Active tab: 'ADS-B'
+Tab count: 6
+Current index: 0
+Current tab text: 'ADS-B'
+
+Button: startButton
+  Enabled: True
+  Visible: True
+  Size: 507x58
+  Pos: (4, 5)
+  FocusPolicy: 0
+  Parent: 'buttonBarFrame' visible=True size=2560x56
+  GrandParent: '' visible=True
+
+Button: stopButton
+  Enabled: False
+  Visible: True
+  Size: 507x58
+  Pos: (515, 5)
+  FocusPolicy: 0
+  Parent: 'buttonBarFrame' visible=True size=2560x56
+  GrandParent: '' visible=True
+
+Button: markButton
+  Enabled: False
+  Visible: True
+  Size: 508x58
+  Pos: (1026, 5)
+  FocusPolicy: 0
+  Parent: 'buttonBarFrame' visible=True size=2560x56
+  GrandParent: '' visible=True
+
+Button: scanButton
+  Enabled: True
+  Visible: True
+  Size: 507x58
+  Pos: (1538, 5)
+  FocusPolicy: 0
+  Parent: 'buttonBarFrame' visible=True size=2560x56
+  GrandParent: '' visible=True
+
+Button: configButton
+  Enabled: True
+  Visible: True
+  Size: 507x58
+  Pos: (2049, 5)
+  FocusPolicy: 0
+  Parent: 'buttonBarFrame' visible=True size=2560x56
+  GrandParent: '' visible=True
+
+SDR manager: True
+  is_connected: True
+  is_running: False
+
+ADS-B manager: True
+  is_running: False
+
+START button receivers: 1
+STOP button receivers: 1
+
+--- Simulating START click ---
+START is ENABLED - clicking...
+Click sent!
+
+--- After START click (3s) ---
+ADS-B running: True
+SDR running: False
+  startButton: enabled=True
+  stopButton: enabled=False
+  markButton: enabled=False
+  scanButton: enabled=True
+  configButton: enabled=True
+
+============================================================
+DIAGNOSTICS COMPLETE
+============================================================
+
+Full report saved to: C:\Users\jakel\Desktop\rf_tactical\button_report.txt

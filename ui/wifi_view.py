@@ -137,9 +137,9 @@ class WiFiTableModel(QAbstractTableModel):
         elif role == Qt.TextAlignmentRole:
             return Qt.AlignCenter
         elif role == Qt.ForegroundRole:
-            return QColor("#00FF41")
+            return QColor("#D4A0FF")
         elif role == Qt.BackgroundRole:
-            return QColor("#0A0A0A")
+            return QColor("#0A0A0F")
         return QVariant()
 
     def _get_display_value(self, network: dict, col: int) -> object:
@@ -321,9 +321,9 @@ class BLETableModel(QAbstractTableModel):
         elif role == Qt.TextAlignmentRole:
             return Qt.AlignCenter
         elif role == Qt.ForegroundRole:
-            return QColor("#00FF41")
+            return QColor("#D4A0FF")
         elif role == Qt.BackgroundRole:
-            return QColor("#0A0A0A")
+            return QColor("#0A0A0F")
         return QVariant()
 
     def _get_display_value(self, device: dict, col: int) -> object:
@@ -446,7 +446,7 @@ class WiFiView(QWidget):
         wifi_layout.addWidget(header_label)
 
         self._wifi_summary.setFont(QFont("DejaVu Sans Mono", 10, QFont.Bold))
-        self._wifi_summary.setStyleSheet("color: #00CC33; background: transparent; border: none;")
+        self._wifi_summary.setStyleSheet("color: #BB86FC; background: transparent; border: none;")
         self._wifi_summary.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._wifi_summary.setFixedHeight(22)
         wifi_layout.addWidget(self._wifi_summary)
@@ -485,11 +485,11 @@ class WiFiView(QWidget):
         wifi_footer.setContentsMargins(0, 0, 0, 0)
         wifi_footer.setSpacing(8)
         self._sort_label.setFont(QFont("DejaVu Sans Mono", 9, QFont.Bold))
-        self._sort_label.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        self._sort_label.setStyleSheet("color: #D4A0FF; background: transparent; border: none;")
         wifi_footer.addWidget(self._sort_label)
         wifi_footer.addStretch(1)
         self._status_label.setFont(QFont("DejaVu Sans Mono", 9))
-        self._status_label.setStyleSheet("color: #006B1F; background: transparent; border: none;")
+        self._status_label.setStyleSheet("color: #6C3483; background: transparent; border: none;")
         wifi_footer.addWidget(self._status_label)
         wifi_layout.addLayout(wifi_footer)
 
@@ -500,13 +500,13 @@ class WiFiView(QWidget):
 
         ble_header = QLabel("BLUETOOTH LE DEVICES")
         ble_header.setFont(QFont("DejaVu Sans Mono", 12, QFont.Bold))
-        ble_header.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        ble_header.setStyleSheet("color: #D4A0FF; background: transparent; border: none;")
         ble_header.setAlignment(Qt.AlignCenter)
         ble_header.setFixedHeight(22)
         ble_layout.addWidget(ble_header)
 
         self._ble_summary.setFont(QFont("DejaVu Sans Mono", 10, QFont.Bold))
-        self._ble_summary.setStyleSheet("color: #00CC33; background: transparent; border: none;")
+        self._ble_summary.setStyleSheet("color: #BB86FC; background: transparent; border: none;")
         self._ble_summary.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._ble_summary.setFixedHeight(22)
         ble_layout.addWidget(self._ble_summary)
@@ -544,7 +544,7 @@ class WiFiView(QWidget):
         ble_footer.setContentsMargins(0, 0, 0, 0)
         ble_footer.setSpacing(8)
         self._ble_status_label.setFont(QFont("DejaVu Sans Mono", 9))
-        self._ble_status_label.setStyleSheet("color: #006B1F; background: transparent; border: none;")
+        self._ble_status_label.setStyleSheet("color: #6C3483; background: transparent; border: none;")
         ble_footer.addWidget(self._ble_status_label)
         ble_footer.addStretch(1)
         ble_layout.addLayout(ble_footer)
@@ -563,19 +563,19 @@ class WiFiView(QWidget):
     def _refresh_wifi(self) -> None:
         self._wifi_model.clear()
         self._status_label.setText("REFRESHING WIFI...")
-        self._status_label.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        self._status_label.setStyleSheet("color: #D4A0FF; background: transparent; border: none;")
 
     def _refresh_ble(self) -> None:
         self._ble_model.clear()
         self._ble_status_label.setText("REFRESHING BLE...")
-        self._ble_status_label.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        self._ble_status_label.setStyleSheet("color: #D4A0FF; background: transparent; border: none;")
 
     @pyqtSlot(dict)
     def update_networks(self, networks: Dict[str, dict]) -> None:
         """Update the table with new network data."""
         self._wifi_model.update_networks(networks)
         self._status_label.setText(f"NETWORKS: {len(networks)}")
-        self._status_label.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        self._status_label.setStyleSheet("color: #D4A0FF; background: transparent; border: none;")
         strongest = max(
             (net.get("signal_dbm") for net in networks.values() if net.get("signal_dbm") is not None),
             default=None,
@@ -593,7 +593,7 @@ class WiFiView(QWidget):
         """Update the BLE device table."""
         self._ble_model.update_devices(devices)
         self._ble_status_label.setText(f"BLE DEVICES: {len(devices)}")
-        self._ble_status_label.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        self._ble_status_label.setStyleSheet("color: #D4A0FF; background: transparent; border: none;")
         closest = max(
             (dev.get("rssi") for dev in devices.values() if dev.get("rssi") is not None),
             default=None,
@@ -637,11 +637,11 @@ class WiFiView(QWidget):
         """Clear all network data."""
         self._wifi_model.clear()
         self._status_label.setText("AWAITING WIFI DATA")
-        self._status_label.setStyleSheet("color: #006B1F; background: transparent; border: none;")
+        self._status_label.setStyleSheet("color: #6C3483; background: transparent; border: none;")
         self._wifi_summary.setText("Networks: 0 | Strongest: N/A")
         self._ble_model.clear()
         self._ble_status_label.setText("AWAITING BLE DATA")
-        self._ble_status_label.setStyleSheet("color: #006B1F; background: transparent; border: none;")
+        self._ble_status_label.setStyleSheet("color: #6C3483; background: transparent; border: none;")
         self._ble_summary.setText("Devices: 0 | Closest: N/A")
 
     def update_summary(self) -> None:

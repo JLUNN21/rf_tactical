@@ -163,7 +163,7 @@ class ISMDecoder(QObject):
                 self._running = False
             return
 
-        self.decoder_started.emit("ISM decoder active — receiving rtl_433 data")
+        self.decoder_started.emit("ISM decoder active -- receiving rtl_433 data")
 
         while True:
             with QMutexLocker(self._mutex):
@@ -274,7 +274,7 @@ class ISMDecoderManager(QObject):
         self._thread.finished.connect(self._on_thread_finished)
 
     def _on_decoder_stopped(self) -> None:
-        """Handle decoder stop — stop the thread."""
+        """Handle decoder stop -- stop the thread."""
         self.decoder_stopped.emit()
         if self._thread is not None and self._thread.isRunning():
             self._thread.quit()

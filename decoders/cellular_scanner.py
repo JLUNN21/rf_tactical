@@ -275,7 +275,7 @@ class CellularScannerManager(QObject):
         self._thread.finished.connect(self._on_thread_finished)
 
     def _on_scanner_stopped(self) -> None:
-        """Handle scanner stop — stop the thread."""
+        """Handle scanner stop -- stop the thread."""
         self.scanner_stopped.emit()
         if self._thread is not None and self._thread.isRunning():
             self._thread.quit()

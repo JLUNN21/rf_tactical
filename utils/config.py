@@ -162,7 +162,7 @@ class ConfigManager:
 
         waterfall_data = data.get("waterfall_settings", {})
         self._waterfall = WaterfallSettings(
-            colormap=str(waterfall_data.get("colormap", "TACTICAL GREEN")),
+            colormap=str(waterfall_data.get("colormap", "TACTICAL PURPLE")),
         )
 
         sdr_data = data.get("sdr_settings", {})

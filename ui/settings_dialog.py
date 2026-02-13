@@ -31,7 +31,7 @@ class SettingsDialog(QDialog):
 
     restart_sdr_requested = pyqtSignal()
 
-    COLORMAPS = ["TACTICAL GREEN", "IRONBOW", "PLASMA", "GRAY"]
+    COLORMAPS = ["TACTICAL PURPLE", "TACTICAL GREEN", "IRONBOW", "PLASMA", "GRAY"]
 
     def __init__(self, config: ConfigManager, parent=None) -> None:
         super().__init__(parent)
@@ -57,7 +57,7 @@ class SettingsDialog(QDialog):
 
         header = QLabel("ATAK / SYSTEM SETTINGS")
         header.setFont(QFont("DejaVu Sans Mono", 14, QFont.Bold))
-        header.setStyleSheet("color: #00FF41; background: transparent;")
+        header.setStyleSheet("color: #D4A0FF; background: transparent;")
         header.setAlignment(Qt.AlignCenter)
         header.setFixedHeight(30)
         layout.addWidget(header)

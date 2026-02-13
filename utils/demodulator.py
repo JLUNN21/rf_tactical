@@ -104,8 +104,8 @@ class Demodulator:
         """Decode Manchester encoding.
 
         Manchester encoding:
-        - 0 → 01 (low to high transition)
-        - 1 → 10 (high to low transition)
+        - 0 -> 01 (low to high transition)
+        - 1 -> 10 (high to low transition)
 
         Args:
             bits: Raw bit stream.
@@ -137,8 +137,8 @@ class Demodulator:
         """Decode differential encoding.
 
         Differential encoding:
-        - No transition → 0
-        - Transition → 1
+        - No transition -> 0
+        - Transition -> 1
 
         Args:
             bits: Raw bit stream.

@@ -9,10 +9,10 @@ ui_settings:
 display_settings:
   brightness: 200
 waterfall_settings:
-  colormap: TACTICAL GREEN
+  colormap: IRONBOW
 sdr_settings:
   gain_lna: 32
-  gain_vga: 40
+  gain_vga: 47
 decoder_settings:
   adsb_enabled: true
   ism_enabled: true

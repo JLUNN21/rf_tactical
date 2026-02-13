@@ -38,7 +38,7 @@ class LogView(QWidget):
         self._log_output = QPlainTextEdit()
         self._log_output.setReadOnly(True)
         self._log_output.setFont(QFont("Source Code Pro", 9))
-        self._log_output.setStyleSheet("background-color: #050505; color: #00FF41;")
+        self._log_output.setStyleSheet("background-color: #0A0A0F; color: #BB86FC;")
         layout.addWidget(self._log_output)
 
         self._signal = LogSignal()

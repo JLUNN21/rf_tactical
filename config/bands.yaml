@@ -12,8 +12,8 @@ bands:
     description: "ADS-B aircraft transponder signals at 1090 MHz"
 
   ism_433:
-    name: "ISM-433"
-    center_freq_hz: 433920000
+    name: "ISM-390"
+    center_freq_hz: 390000000
     bandwidth_hz: 1000000
     sample_rate_hz: 2000000
     fft_size: 1024
@@ -21,7 +21,7 @@ bands:
     gain_vga: 40
     decoder_type: "ism"
     color_hex: "#00FF41"
-    description: "ISM band 433.92 MHz — weather stations, remotes, sensors"
+    description: "ISM band 390 MHz — Overhead Door garage remotes (OOK/ASK)"
 
   ism_915:
     name: "ISM-915"

@@ -9,11 +9,12 @@ import numpy as np
 
 try:
     import SoapySDR
-    from SoapySDR import SOAPY_SDR_RX, SOAPY_SDR_CF32, SOAPY_SDR_OVERFLOW
+    from SoapySDR import SOAPY_SDR_RX, SOAPY_SDR_TX, SOAPY_SDR_CF32, SOAPY_SDR_OVERFLOW
     SDR_AVAILABLE = True
 except Exception:
     SoapySDR = None
     SOAPY_SDR_RX = None
+    SOAPY_SDR_TX = None
     SOAPY_SDR_CF32 = None
     SOAPY_SDR_OVERFLOW = None
     SDR_AVAILABLE = False
@@ -22,6 +23,10 @@ from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QMutex, QMutexLocker
 
 from radio.iq_recorder import IQRecorder
 from utils.signal_detector import SignalDetector
+from utils.signal_detector_v2 import SignalDetectorV2
+from utils.spectrum_analyzer import SpectrumAnalyzer
+from utils.tx_signal_generator import TxSignalGenerator, TxSignalParams, TxMode
+from utils.flow_tracer import get_flow_tracer
 
 from utils.logger import setup_logger
 
@@ -38,13 +43,16 @@ class SDRWorker(QObject):
     Args:
         center_freq: Initial center frequency in Hz.
         sample_rate: Initial sample rate in Hz.
-        gain_lna: LNA gain (0–40 dB in 8 dB steps).
-        gain_vga: VGA gain (0–62 dB in 2 dB steps).
+        gain_lna: LNA gain (0-40 dB in 8 dB steps).
+        gain_vga: VGA gain (0-62 dB in 2 dB steps).
         fft_size: Number of FFT bins.
         fft_avg_count: Number of FFTs to average per output row.
     """
 
     new_waterfall_row = pyqtSignal(object)
+    spectrum_stats_updated = pyqtSignal(object)   # SpectrumStats from analyzer
+    signal_event_detected = pyqtSignal(object)    # SignalEvent from V2 detector
+    signal_event_closed = pyqtSignal(object)      # Closed SignalEvent with features
     error_occurred = pyqtSignal(str)
     device_connected = pyqtSignal(str)
     device_disconnected = pyqtSignal()
@@ -52,6 +60,9 @@ class SDRWorker(QObject):
     recording_status = pyqtSignal(object)
     overflow_count_updated = pyqtSignal(int)
     signal_detected = pyqtSignal(dict)
+    tx_progress = pyqtSignal(float)  # 0.0 to 1.0
+    tx_complete = pyqtSignal()
+    tx_error = pyqtSignal(str)
 
     def __init__(
         self,
@@ -83,71 +94,65 @@ class SDRWorker(QObject):
         self._overflow_count = 0
         self._recorder = IQRecorder()
         self._last_record_status = 0.0
-        self._signal_detector = SignalDetector(sample_rate=self._sample_rate)
+        self._signal_detector = SignalDetector(
+            sample_rate=self._sample_rate,
+            threshold_db=10,  # 10 dB above noise floor (lowered from 15 for better sensitivity)
+            min_duration_sec=0.0001,  # 0.1ms minimum (200 samples at 2 Msps)
+            max_duration_sec=0.05  # 50ms maximum
+        )
         self._samples_processed = 0
+        self._last_detector_log = 0.0
         self._logger = setup_logger(__name__)
+        self._tx_stream = None
+        self._tx_active = False
+
+        # V2 signal detection pipeline (RFwatch-inspired)
+        self._detector_v2 = SignalDetectorV2(
+            sample_rate=self._sample_rate,
+            fft_size=self._fft_size,
+            snr_enter_db=8.0,
+            snr_exit_db=4.0,
+            bw_threshold_db=6.0,
+            max_misses=10,
+        )
+
+        # Spectrum analyzer with peak detection, averaging, baseline
+        self._spectrum_analyzer = SpectrumAnalyzer(
+            fft_size=self._fft_size,
+            sample_rate=self._sample_rate,
+            window="hanning",
+            history_size=50,
+        )
 
     def _open_device(self) -> bool:
-        """Open HackRF device via SoapySDR with multiple fallback strategies."""
+        """Open HackRF device via SoapySDR."""
         if not SDR_AVAILABLE:
             self._logger.error("Cannot open device - SoapySDR not available")
             self.error_occurred.emit("SDR OFFLINE")
             self.connection_status.emit("DISCONNECTED", 0.0)
             return False
 
-        # Try multiple strategies to open the device
-        self._sdr = None
-        
-        # Strategy 1: Try with driver="hackrf"
-        self._logger.info("Strategy 1: Opening with driver='hackrf'")
         try:
-            self._sdr = SoapySDR.Device(dict(driver="hackrf"))
-            if self._sdr is not None:
-                self._logger.info("[OK] Strategy 1 succeeded")
-                return self._configure_device()
-        except Exception as e:
-            self._logger.warning("Strategy 1 failed: %s", e)
-            self._sdr = None
-        
-        # Strategy 2: Try with driver="hackrf" and enumerate to get serial
-        self._logger.info("Strategy 2: Enumerating to find device with serial number")
-        try:
+            self._logger.info("Opening HackRF device...")
+            
+            # First enumerate to find the device
             results = SoapySDR.Device.enumerate("driver=hackrf")
-            if results:
-                self._logger.info("Found %d HackRF device(s) via enumeration", len(results))
-                # Try first device with full args
-                device_args = results[0]
-                self._logger.info("Trying to open with args: %s", device_args)
-                self._sdr = SoapySDR.Device(device_args)
-                if self._sdr is not None:
-                    self._logger.info("[OK] Strategy 2 succeeded")
-                    return self._configure_device()
-        except Exception as e:
-            self._logger.warning("Strategy 2 failed: %s", e)
+            if not results:
+                raise RuntimeError("No HackRF devices found during enumeration")
+            
+            self._logger.info("Found %d HackRF device(s), opening first one", len(results))
+            self._logger.info("Device info: %s", results[0])
+            
+            # Open using the enumeration result
+            self._sdr = SoapySDR.Device(results[0])
+            return self._configure_device()
+        except Exception as exc:
+            error_msg = f"Failed to open HackRF: {exc}"
+            self._logger.error(error_msg)
+            self.error_occurred.emit(error_msg)
+            self.connection_status.emit("ERROR", 0.0)
             self._sdr = None
-        
-        # Strategy 3: Try with empty args (let SoapySDR auto-detect)
-        self._logger.info("Strategy 3: Opening with empty args (auto-detect)")
-        try:
-            self._sdr = SoapySDR.Device()
-            if self._sdr is not None:
-                self._logger.info("[OK] Strategy 3 succeeded")
-                return self._configure_device()
-        except Exception as e:
-            self._logger.warning("Strategy 3 failed: %s", e)
-            self._sdr = None
-        
-        # All strategies failed
-        error_msg = "Failed to open HackRF with all strategies"
-        self._logger.error(error_msg)
-        self._logger.error("Possible causes:")
-        self._logger.error("  1. Device is in use by another program (SDR#, GQRX, etc.)")
-        self._logger.error("  2. USB driver is incorrect - use Zadig to install WinUSB driver")
-        self._logger.error("  3. Insufficient USB permissions")
-        self._logger.error("  4. Device is not properly connected")
-        self.error_occurred.emit("Failed to open HackRF: " + error_msg)
-        self.connection_status.emit("ERROR", 0.0)
-        return False
+            return False
 
     def _configure_device(self) -> bool:
         """Configure the opened SDR device."""
@@ -171,7 +176,7 @@ class SDRWorker(QObject):
             self._sdr.activateStream(self._stream)
 
             info_str = (
-                f"HackRF connected — "
+                f"HackRF connected -- "
                 f"{self._center_freq / 1e6:.3f} MHz, "
                 f"{self._sample_rate / 1e6:.1f} Msps, "
                 f"LNA={self._gain_lna} VGA={self._gain_vga}"
@@ -222,64 +227,142 @@ class SDRWorker(QObject):
         Returns:
             True if a full block was read, False on error.
         """
-        samples_needed = self._fft_size
-        offset = 0
+        flow = get_flow_tracer()
+        flow.enter("ISM", "_read_iq_block", fft_size=self._fft_size)
+        
+        try:
+            samples_needed = self._fft_size
+            offset = 0
+            
+            flow.step("ISM", f"Reading {samples_needed} IQ samples from HackRF")
 
-        while offset < samples_needed:
-            remaining = samples_needed - offset
-            sr = self._sdr.readStream(
-                self._stream,
-                [self._iq_buffer[offset:]],
-                remaining,
-                timeoutUs=500000,
-            )
-            ret_code = sr.ret
+            while offset < samples_needed:
+                remaining = samples_needed - offset
+                sr = self._sdr.readStream(
+                    self._stream,
+                    [self._iq_buffer[offset:]],
+                    remaining,
+                    timeoutUs=500000,
+                )
+                ret_code = sr.ret
 
-            if ret_code < 0:
-                if ret_code == SOAPY_SDR_OVERFLOW:
-                    self._overflow_count += 1
-                    self.overflow_count_updated.emit(self._overflow_count)
+                if ret_code < 0:
+                    if ret_code == SOAPY_SDR_OVERFLOW:
+                        self._overflow_count += 1
+                        self.overflow_count_updated.emit(self._overflow_count)
+                        flow.warning("ISM", f"Buffer overflow (count: {self._overflow_count})")
+                        continue
+                    error_msg = SoapySDR.errToStr(ret_code)
+                    flow.fail("ISM", f"readStream error: {error_msg}")
+                    self._logger.error("readStream error: %s", error_msg)
+                    self.error_occurred.emit(f"readStream error: {error_msg}")
+                    flow.exit("ISM", "_read_iq_block", "FAILED")
+                    return False
+
+                if ret_code == 0:
                     continue
-                self._logger.error("readStream error: %s", SoapySDR.errToStr(ret_code))
-                self.error_occurred.emit(f"readStream error: {SoapySDR.errToStr(ret_code)}")
-                return False
 
-            if ret_code == 0:
-                continue
+                offset += ret_code
+            
+            flow.success("ISM", f"Read {offset} samples successfully")
 
-            offset += ret_code
-
-        if self._recorder.recording:
+            # Always process samples for signal detection
+            flow.step("ISM", "Calling SignalDetector.process_samples()")
             valid_samples = self._iq_buffer[:offset].copy()
-            self._recorder.write_samples(valid_samples)
-            detected = self._signal_detector.process_samples(valid_samples)
+            
+            try:
+                detected = self._signal_detector.process_samples(valid_samples)
+                flow.success("ISM", f"Signal detection complete (found {len(detected)} signals)")
+            except Exception as e:
+                flow.fail("ISM", f"Signal detection failed: {e}")
+                detected = []
+            
+            # Log noise floor every 5 seconds for debugging (time-based)
+            now = time.time()
+            if now - self._last_detector_log >= 5.0:
+                self._last_detector_log = now
+                flow.data("ISM", "noise_floor", f"{self._signal_detector.noise_floor_db:.1f} dBm")
+                flow.data("ISM", "threshold", f"+{self._signal_detector.threshold_db:.1f} dB")
+                flow.data("ISM", "absolute_threshold", f"{self._signal_detector.noise_floor_db + self._signal_detector.threshold_db:.1f} dBm")
+                self._logger.info(" Signal Detector: noise_floor=%.1f dBm, threshold=+%.1f dB, absolute_threshold=%.1f dBm",
+                                self._signal_detector.noise_floor_db,
+                                self._signal_detector.threshold_db,
+                                self._signal_detector.noise_floor_db + self._signal_detector.threshold_db)
+            
             if detected:
                 for sig in detected:
                     timestamp = self._samples_processed / self._sample_rate
                     freq_hz = self._center_freq + sig["center_freq_offset_hz"]
-                    self._recorder.mark_signal_event(
-                        freq_hz=freq_hz,
-                        power_dbm=sig["peak_power_dbm"],
-                        duration_sec=sig["duration_sec"],
-                    )
+                    
+                    flow.success("ISM", f"Signal found: {freq_hz/1e6:.3f} MHz @ {sig['peak_power_dbm']:.1f} dBm")
+                    
+                    # Log signal detection
+                    self._logger.info(" SIGNAL DETECTED: %.3f MHz @ %.1f dBm (duration: %.3fs)",
+                                    freq_hz / 1e6, sig["peak_power_dbm"], sig["duration_sec"])
+                    
+                    # Emit signal detection event
                     self.signal_detected.emit(
                         {
                             "timestamp": timestamp,
                             "frequency": freq_hz,
+                            "center_freq_hz": freq_hz,
                             "power": sig["peak_power_dbm"],
+                            "peak_power_dbm": sig["peak_power_dbm"],
                             "duration": sig["duration_sec"],
+                            "duration_sec": sig["duration_sec"],
+                            "bandwidth_hz": sig.get("bandwidth_hz", 50000),
                         }
                     )
+                    
+                    # If recording, also mark in recording file
+                    if self._recorder.recording:
+                        self._recorder.mark_signal_event(
+                            freq_hz=freq_hz,
+                            power_dbm=sig["peak_power_dbm"],
+                            duration_sec=sig["duration_sec"],
+                        )
+            
+            # ── V2 Signal Detection Pipeline (RFwatch-inspired) ──
+            try:
+                v2_result = self._detector_v2.process_chunk(valid_samples)
+                
+                # Emit active events
+                for evt in v2_result.get("active_events", []):
+                    self.signal_event_detected.emit(evt)
+                
+                # Emit closed events (with extracted features)
+                for evt in v2_result.get("closed_events", []):
+                    self.signal_event_closed.emit(evt)
+                    self._logger.info(
+                        " Signal event closed: %s | center=%.3f MHz | dur=%.3fs | hits=%d",
+                        evt.id,
+                        evt.last_center / 1e6 if evt.last_center else 0,
+                        evt.duration_sec,
+                        evt.hit_count,
+                    )
+            except Exception as e:
+                flow.warning("ISM", f"V2 detector error: {e}")
 
-        self._samples_processed += offset
+            # If recording, write samples to file
+            if self._recorder.recording:
+                self._recorder.write_samples(valid_samples)
 
-        return True
+            self._samples_processed += offset
+            
+            flow.exit("ISM", "_read_iq_block", "SUCCESS")
+            return True
+            
+        except Exception as e:
+            flow.fail("ISM", f"Unexpected error: {e}")
+            flow.exit("ISM", "_read_iq_block", "FAILED")
+            return False
 
     def _compute_fft_db(self) -> np.ndarray:
-        """Apply window, compute FFT, return magnitude in dB as float32."""
+        """Apply window, compute FFT, return power in linear scale."""
         windowed = self._iq_buffer * self._window
         spectrum = np.fft.fftshift(np.fft.fft(windowed))
-        power = np.real(spectrum * np.conj(spectrum))
+        # Normalize by FFT size to get proper power scaling
+        power = (np.abs(spectrum) ** 2) / (self._fft_size ** 2)
         return power
 
     @pyqtSlot()
@@ -324,6 +407,19 @@ class SDRWorker(QObject):
 
             avg_power = self._power_accum / self._fft_avg_count
             magnitude_db = 10.0 * np.log10(avg_power + 1e-10)
+            
+            # ── Spectrum Analyzer: update stats, peak detection, baseline ──
+            try:
+                stats = self._spectrum_analyzer.update(magnitude_db)
+                self.spectrum_stats_updated.emit(stats)
+            except Exception:
+                pass
+            
+            # Debug: Log min/max values occasionally
+            if self._samples_processed % (self._sample_rate * 2) < self._fft_size:  # Every ~2 seconds
+                self._logger.debug("FFT dB range: min=%.1f, max=%.1f, mean=%.1f", 
+                                 np.min(magnitude_db), np.max(magnitude_db), np.mean(magnitude_db))
+            
             self.new_waterfall_row.emit(magnitude_db.astype(np.float32))
 
             now = time.time()
@@ -368,6 +464,8 @@ class SDRWorker(QObject):
             self._center_freq = center_freq
             self._sample_rate = sample_rate
             self._signal_detector.set_sample_rate(sample_rate)
+            self._detector_v2.set_sample_rate(sample_rate)
+            self._spectrum_analyzer.set_sample_rate(sample_rate)
 
         if self._sdr is not None:
             try:
@@ -401,8 +499,204 @@ class SDRWorker(QObject):
         """Update the signal detection threshold."""
         self._signal_detector.set_threshold(threshold_db)
 
+    # ── Spectrum Analyzer & V2 Detector API ─────────────────────
+
+    @property
+    def spectrum_analyzer(self) -> SpectrumAnalyzer:
+        """Access the spectrum analyzer for peak hold, average, baseline."""
+        return self._spectrum_analyzer
+
+    @property
+    def detector_v2(self) -> SignalDetectorV2:
+        """Access the V2 signal detector for event tracking."""
+        return self._detector_v2
+
+    def start_baseline_capture(self):
+        """Start capturing baseline spectrum for anomaly detection."""
+        self._spectrum_analyzer.start_baseline_capture()
+        self._logger.info(" Baseline capture started")
+
+    def finish_baseline_capture(self):
+        """Finish baseline capture and return the baseline."""
+        baseline = self._spectrum_analyzer.finish_baseline_capture()
+        if baseline is not None:
+            self._logger.info(" Baseline captured (%d bins)", len(baseline))
+        return baseline
+
+    def clear_baseline(self):
+        """Clear the baseline spectrum."""
+        self._spectrum_analyzer.clear_baseline()
+
+    def reset_peak_hold(self):
+        """Reset peak hold max/min in the spectrum analyzer."""
+        self._spectrum_analyzer.reset_peak_hold()
+
+    def set_fft_window(self, window_name: str):
+        """Change the FFT window function (hanning, hamming, blackman, etc.)."""
+        self._spectrum_analyzer.set_window(window_name)
+        self._logger.info(" FFT window changed to: %s", window_name)
+
+    def set_v2_thresholds(self, snr_enter_db: float, snr_exit_db: float):
+        """Update V2 detector SNR thresholds."""
+        self._detector_v2.set_thresholds(snr_enter_db, snr_exit_db)
+
+    def get_v2_statistics(self) -> dict:
+        """Get V2 detector statistics."""
+        return self._detector_v2.get_statistics()
+
     @property
     def is_running(self) -> bool:
         """Whether the capture loop is currently active."""
         with QMutexLocker(self._mutex):
             return self._running
+    
+    def generate_and_transmit(
+        self,
+        mode: str,
+        center_freq: float,
+        duration_sec: float = 1.0,
+        sample_rate: float = 2e6,
+        tx_gain: int = 30,
+        **kwargs,
+    ):
+        """Generate a signal and transmit it in one call.
+
+        Convenience method that uses TxSignalGenerator to create IQ samples
+        and then transmits them via HackRF.
+
+        Args:
+            mode: TX mode string (e.g. 'fm', 'am', 'noise', 'chirp', 'morse',
+                  'barrage_jam', 'spot_jam', 'sweep_jam', etc.)
+            center_freq: TX center frequency in Hz.
+            duration_sec: Signal duration in seconds.
+            sample_rate: Sample rate in Hz.
+            tx_gain: TX VGA gain 0-47 dB.
+            **kwargs: Additional params passed to TxSignalParams.
+        """
+        try:
+            tx_mode = TxMode(mode)
+        except ValueError:
+            self.tx_error.emit(f"Unknown TX mode: {mode}")
+            return
+
+        params = TxSignalParams(
+            mode=tx_mode,
+            sample_rate=sample_rate,
+            duration_sec=duration_sec,
+            **kwargs,
+        )
+
+        valid, err = TxSignalGenerator.validate_params(params)
+        if not valid:
+            self.tx_error.emit(f"Invalid TX params: {err}")
+            return
+
+        gen = TxSignalGenerator()
+        iq = gen.generate(params)
+        self.transmit_signal(iq, center_freq, sample_rate, tx_gain)
+
+    def transmit_signal(self, iq_samples: np.ndarray, center_freq: float, sample_rate: float = 2e6, tx_gain: int = 30):
+        """Transmit IQ samples via HackRF TX.
+        
+        Args:
+            iq_samples: Complex IQ samples to transmit (numpy array)
+            center_freq: TX frequency in Hz
+            sample_rate: TX sample rate in Hz (default 2 MHz)
+            tx_gain: TX VGA gain 0-47 dB (default 30 dB for safety)
+        """
+        if not SDR_AVAILABLE:
+            self.tx_error.emit("SoapySDR not available")
+            return
+        
+        if self._tx_active:
+            self.tx_error.emit("TX already in progress")
+            return
+        
+        self._tx_active = True
+        tx_sdr = None
+        tx_stream = None
+        
+        try:
+            self._logger.info(" Starting TX: %.3f MHz, %d samples, %.3f sec",
+                            center_freq / 1e6, len(iq_samples), len(iq_samples) / sample_rate)
+            
+            # Open a separate SDR instance for TX (don't interfere with RX)
+            results = SoapySDR.Device.enumerate("driver=hackrf")
+            if not results:
+                raise RuntimeError("No HackRF devices found")
+            
+            tx_sdr = SoapySDR.Device(results[0])
+            
+            # Configure TX
+            tx_sdr.setSampleRate(SOAPY_SDR_TX, 0, sample_rate)
+            tx_sdr.setFrequency(SOAPY_SDR_TX, 0, center_freq)
+            tx_sdr.setGain(SOAPY_SDR_TX, 0, "VGA", min(tx_gain, 47))  # Cap at 47 dB for safety
+            tx_sdr.setAntenna(SOAPY_SDR_TX, 0, "TX/RX")
+            
+            # Setup TX stream
+            tx_stream = tx_sdr.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32, [0])
+            if tx_stream is None:
+                raise RuntimeError("Failed to setup TX stream")
+            
+            # Activate stream
+            tx_sdr.activateStream(tx_stream)
+            
+            # Convert to complex64 if needed
+            if iq_samples.dtype != np.complex64:
+                iq_samples = iq_samples.astype(np.complex64)
+            
+            # Transmit in chunks
+            chunk_size = 1024
+            total_samples = len(iq_samples)
+            samples_sent = 0
+            
+            while samples_sent < total_samples:
+                chunk_end = min(samples_sent + chunk_size, total_samples)
+                chunk = iq_samples[samples_sent:chunk_end]
+                
+                # Write samples to TX stream
+                sr = tx_sdr.writeStream(tx_stream, [chunk], len(chunk), timeoutUs=1000000)
+                
+                if sr.ret < 0:
+                    error_msg = SoapySDR.errToStr(sr.ret)
+                    raise RuntimeError(f"writeStream error: {error_msg}")
+                
+                samples_sent += sr.ret
+                
+                # Emit progress
+                progress = samples_sent / total_samples
+                self.tx_progress.emit(progress)
+                
+                # Small delay to avoid overwhelming the device
+                time.sleep(0.001)
+            
+            # Deactivate and close TX stream
+            tx_sdr.deactivateStream(tx_stream)
+            tx_sdr.closeStream(tx_stream)
+            tx_stream = None
+            tx_sdr = None
+            
+            self._logger.info("✅ TX complete: %d samples transmitted", samples_sent)
+            self.tx_complete.emit()
+            
+        except Exception as e:
+            error_msg = f"TX failed: {str(e)}"
+            self._logger.error("[X] %s", error_msg)
+            self.tx_error.emit(error_msg)
+            
+        finally:
+            # Cleanup TX resources
+            if tx_stream is not None and tx_sdr is not None:
+                try:
+                    tx_sdr.deactivateStream(tx_stream)
+                    tx_sdr.closeStream(tx_stream)
+                except Exception:
+                    pass
+            
+            if tx_sdr is not None:
+                try:
+                    del tx_sdr
+                except Exception:
+                    pass
+            
+            self._tx_active = False

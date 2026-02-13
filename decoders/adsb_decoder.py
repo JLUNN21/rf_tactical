@@ -52,6 +52,7 @@ class ADSBDecoder(QObject):
         observer_lat: float = 0.0,
         observer_lon: float = 0.0,
         stale_timeout: float = 60.0,
+        host: str = "127.0.0.1",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -59,12 +60,15 @@ class ADSBDecoder(QObject):
         self._observer_lat = observer_lat
         self._observer_lon = observer_lon
         self._stale_timeout = stale_timeout
+        self._host = host
 
         self._running = False
         self._mutex = QMutex()
+        self._mode = "beast"  # "beast" or "sbs"
 
         self._dump1090_process: Optional[subprocess.Popen] = None
         self._socket: Optional[socket.socket] = None
+        self._sbs_buffer = ""
 
         self._aircraft: Dict[str, dict] = {}
         self._logger = setup_logger(__name__)
@@ -72,12 +76,18 @@ class ADSBDecoder(QObject):
     def _launch_dump1090(self) -> bool:
         """Launch dump1090 subprocess with HackRF device type.
 
+        On Windows, skip subprocess launch and try to connect to an existing
+        dump1090/readsb instance (local or network). On Linux, attempt to
+        launch dump1090 as a subprocess.
+
         Returns:
-            True if subprocess started successfully, False otherwise.
+            True if subprocess started or skipped (network mode), False on fatal error.
         """
         if sys.platform != "linux":
-            self.error_occurred.emit("DECODER OFFLINE - Not available on Windows")
-            return False
+            # On Windows, don't launch subprocess -- use network-only mode
+            self._logger.info("Windows detected -- using network-only ADS-B mode")
+            self._logger.info("Will try Beast (30005), then SBS (30003) on %s", self._host)
+            return True  # Skip subprocess, go straight to network connect
 
         try:
             self._dump1090_process = subprocess.Popen(
@@ -103,39 +113,62 @@ class ADSBDecoder(QObject):
             return True
 
         except FileNotFoundError:
-            self._logger.error("dump1090 not found")
-            self.error_occurred.emit("DECODER OFFLINE")
-            return False
+            self._logger.error("dump1090 not found -- trying network-only mode")
+            return True  # Fall through to network connect
         except Exception as exc:
-            self._logger.exception("dump1090 launch failed")
-            self.error_occurred.emit("DECODER OFFLINE")
-            return False
+            self._logger.exception("dump1090 launch failed -- trying network-only mode")
+            return True  # Fall through to network connect
 
     def _connect_beast_feed(self) -> bool:
-        """Connect to dump1090 Beast binary feed on localhost:30005.
+        """Connect to ADS-B data feed. Tries Beast binary (30005) first,
+        then falls back to SBS BaseStation text (30003).
 
         Returns:
             True if connection successful, False otherwise.
         """
+        # Try Beast binary feed first (port 30005)
         try:
+            self._logger.info("Trying Beast feed on %s:30005...", self._host)
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._socket.settimeout(5.0)
-            self._socket.connect(("127.0.0.1", 30005))
+            self._socket.settimeout(3.0)
+            self._socket.connect((self._host, 30005))
             self._socket.settimeout(1.0)
+            self._mode = "beast"
+            self._logger.info("Connected to Beast feed on %s:30005", self._host)
             return True
+        except (socket.timeout, ConnectionRefusedError, OSError):
+            self._logger.info("Beast feed not available on %s:30005", self._host)
+            try:
+                self._socket.close()
+            except Exception:
+                pass
+            self._socket = None
 
-        except socket.timeout:
-            self._logger.warning("Beast feed connection timeout")
-            self.error_occurred.emit("DECODER OFFLINE")
-            return False
-        except ConnectionRefusedError:
-            self._logger.warning("Beast feed connection refused")
-            self.error_occurred.emit("DECODER OFFLINE")
-            return False
-        except Exception as exc:
-            self._logger.exception("Beast feed connection failed")
-            self.error_occurred.emit("DECODER OFFLINE")
-            return False
+        # Fall back to SBS BaseStation text feed (port 30003)
+        try:
+            self._logger.info("Trying SBS feed on %s:30003...", self._host)
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._socket.settimeout(3.0)
+            self._socket.connect((self._host, 30003))
+            self._socket.settimeout(1.0)
+            self._mode = "sbs"
+            self._sbs_buffer = ""
+            self._logger.info("Connected to SBS feed on %s:30003", self._host)
+            return True
+        except (socket.timeout, ConnectionRefusedError, OSError):
+            self._logger.info("SBS feed not available on %s:30003", self._host)
+            try:
+                self._socket.close()
+            except Exception:
+                pass
+            self._socket = None
+
+        # Neither feed available
+        self._logger.warning("No ADS-B feed available on %s (tried Beast:30005, SBS:30003)", self._host)
+        self.error_occurred.emit(
+            f"NO ADS-B FEED -- Run dump1090 or readsb on {self._host}"
+        )
+        return False
 
     def _read_beast_message(self) -> Optional[bytes]:
         """Read one Beast binary message from the socket.
@@ -270,8 +303,69 @@ class ADSBDecoder(QObject):
                     aircraft["longitude"],
                 )
 
+            # Classify military aircraft by callsign prefix
+            aircraft["military"] = self._is_military_callsign(
+                aircraft.get("callsign", "")
+            )
+
         except Exception:
             self._logger.exception("ADS-B decode error")
+
+    # Common military callsign prefixes (NATO/US/UK/etc.)
+    MILITARY_PREFIXES = (
+        "RCH", "REACH",  # USAF Air Mobility Command
+        "EVAC",           # Aeromedical evacuation
+        "RRR",            # USAF tanker
+        "DUKE",           # USAF special ops
+        "KING",           # USAF rescue
+        "JOLLY",          # USAF rescue
+        "PEDRO",          # USAF pararescue
+        "TOPCAT",         # USN
+        "NAVY",           # USN
+        "ARMY",           # US Army
+        "PAT",            # USAF patriot express
+        "SAM",            # Special Air Mission
+        "EXEC",           # Executive flight
+        "AF1", "AF2",     # Air Force One/Two
+        "SPAR",           # USAF VIP
+        "ASCOT",          # RAF
+        "RAFR",           # RAF
+        "TARTN",          # RAF
+        "GAF",            # German Air Force
+        "FAF",            # French Air Force
+        "IAM",            # Italian Air Force
+        "CASA",           # Spanish Air Force
+        "BAF",            # Belgian Air Force
+        "RNL",            # Royal Netherlands AF
+        "SUI",            # Swiss Air Force
+        "HAF",            # Hellenic Air Force
+        "PLF",            # Polish Air Force
+        "HUF",            # Hungarian Air Force
+        "CFC",            # Canadian Forces
+        "CANF",           # Canadian Forces
+        "RAAF",           # Royal Australian AF
+        "RNZAF",          # Royal NZ AF
+        "JASDF",          # Japan ASDF
+        "ROKAF",          # Republic of Korea AF
+    )
+
+    @classmethod
+    def _is_military_callsign(cls, callsign: str) -> bool:
+        """Check if callsign matches known military prefixes.
+
+        Args:
+            callsign: Aircraft callsign string.
+
+        Returns:
+            True if callsign matches a military prefix.
+        """
+        if not callsign:
+            return False
+        cs = callsign.strip().upper()
+        for prefix in cls.MILITARY_PREFIXES:
+            if cs.startswith(prefix):
+                return True
+        return False
 
     def _calculate_distance(self, lat: float, lon: float) -> float:
         """Calculate great circle distance from observer to aircraft.
@@ -363,27 +457,160 @@ class ADSBDecoder(QObject):
             self._logger.exception("Position decode error")
             return None
 
+    def _read_sbs_messages(self) -> None:
+        """Read and parse SBS BaseStation text messages from socket.
+
+        SBS format (CSV): MSG,type,session,aircraft,icao,flight,date,time,date,time,
+                          callsign,altitude,speed,heading,lat,lon,vertrate,squawk,...
+        """
+        try:
+            data = self._socket.recv(4096)
+            if not data:
+                return
+            self._sbs_buffer += data.decode("ascii", errors="ignore")
+        except socket.timeout:
+            return
+        except Exception:
+            return
+
+        while "\n" in self._sbs_buffer:
+            line, self._sbs_buffer = self._sbs_buffer.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            self._parse_sbs_line(line)
+
+    def _parse_sbs_line(self, line: str) -> None:
+        """Parse a single SBS BaseStation CSV line and update aircraft state.
+
+        Args:
+            line: SBS CSV line string.
+        """
+        try:
+            fields = line.split(",")
+            if len(fields) < 11:
+                return
+            if fields[0] != "MSG":
+                return
+
+            icao = fields[4].strip().upper()
+            if not icao or len(icao) != 6:
+                return
+
+            now = time.time()
+
+            if icao not in self._aircraft:
+                self._aircraft[icao] = {
+                    "icao": icao,
+                    "callsign": None,
+                    "altitude": None,
+                    "latitude": None,
+                    "longitude": None,
+                    "velocity": None,
+                    "heading": None,
+                    "vertical_rate": None,
+                    "squawk": None,
+                    "last_seen": now,
+                    "distance": None,
+                    "cpr_even": None,
+                    "cpr_even_time": None,
+                    "cpr_odd": None,
+                    "cpr_odd_time": None,
+                }
+
+            aircraft = self._aircraft[icao]
+            aircraft["last_seen"] = now
+
+            msg_type = fields[1].strip()
+
+            # MSG type 1: callsign
+            if msg_type == "1":
+                callsign = fields[10].strip() if len(fields) > 10 else ""
+                if callsign:
+                    aircraft["callsign"] = callsign
+
+            # MSG type 3: position
+            elif msg_type == "3":
+                if len(fields) > 11 and fields[11].strip():
+                    try:
+                        alt_ft = float(fields[11].strip())
+                        aircraft["altitude"] = alt_ft * 0.3048
+                    except ValueError:
+                        pass
+                if len(fields) > 14 and fields[14].strip() and fields[15].strip():
+                    try:
+                        lat = float(fields[14].strip())
+                        lon = float(fields[15].strip())
+                        aircraft["latitude"] = lat
+                        aircraft["longitude"] = lon
+                        aircraft["distance"] = self._calculate_distance(lat, lon)
+                    except ValueError:
+                        pass
+
+            # MSG type 4: velocity
+            elif msg_type == "4":
+                if len(fields) > 12 and fields[12].strip():
+                    try:
+                        speed_kts = float(fields[12].strip())
+                        aircraft["velocity"] = speed_kts * 0.514444  # kts -> m/s
+                    except ValueError:
+                        pass
+                if len(fields) > 13 and fields[13].strip():
+                    try:
+                        aircraft["heading"] = float(fields[13].strip())
+                    except ValueError:
+                        pass
+                if len(fields) > 16 and fields[16].strip():
+                    try:
+                        vr_fpm = float(fields[16].strip())
+                        aircraft["vertical_rate"] = vr_fpm * 0.00508  # ft/min -> m/s
+                    except ValueError:
+                        pass
+
+            # MSG type 5: altitude
+            elif msg_type == "5":
+                if len(fields) > 11 and fields[11].strip():
+                    try:
+                        alt_ft = float(fields[11].strip())
+                        aircraft["altitude"] = alt_ft * 0.3048
+                    except ValueError:
+                        pass
+
+            # MSG type 6: squawk
+            elif msg_type == "6":
+                if len(fields) > 17 and fields[17].strip():
+                    aircraft["squawk"] = fields[17].strip()
+
+            # Classify military
+            aircraft["military"] = self._is_military_callsign(
+                aircraft.get("callsign", "")
+            )
+
+        except Exception:
+            self._logger.debug("SBS parse error: %s", line[:80])
+
     @pyqtSlot()
     def start_decoder(self) -> None:
-        """Start the ADS-B decoder: launch dump1090, connect to Beast feed, decode loop."""
+        """Start the ADS-B decoder: launch dump1090, connect to feed, decode loop."""
         with QMutexLocker(self._mutex):
             if self._running:
                 return
             self._running = True
 
-        if not PYMODE_S_AVAILABLE:
-            self._logger.error("pyModeS not installed")
-            self.error_occurred.emit("DECODER OFFLINE")
-            with QMutexLocker(self._mutex):
-                self._running = False
-            return
+        if not PYMODE_S_AVAILABLE and self._mode != "sbs":
+            # SBS mode doesn't need pyModeS
+            self._logger.warning("pyModeS not installed -- will try SBS mode only")
 
         if not self._launch_dump1090():
             with QMutexLocker(self._mutex):
                 self._running = False
             return
 
-        time.sleep(3.0)
+        # Only sleep if we launched a subprocess (Linux)
+        if self._dump1090_process is not None:
+            time.sleep(3.0)
+        else:
+            time.sleep(0.5)
 
         if not self._connect_beast_feed():
             self._stop_dump1090()
@@ -391,7 +618,8 @@ class ADSBDecoder(QObject):
                 self._running = False
             return
 
-        self.decoder_started.emit("ADS-B decoder active — receiving Beast feed")
+        mode_label = "Beast binary" if self._mode == "beast" else "SBS BaseStation"
+        self.decoder_started.emit(f"ADS-B ACTIVE -- {mode_label} feed")
 
         last_stale_check = time.time()
         last_emit = time.time()
@@ -401,9 +629,13 @@ class ADSBDecoder(QObject):
                 if not self._running:
                     break
 
-            msg = self._read_beast_message()
-            if msg is not None:
-                self._decode_message(msg)
+            if self._mode == "beast":
+                msg = self._read_beast_message()
+                if msg is not None:
+                    self._decode_message(msg)
+            else:
+                # SBS mode -- read text lines
+                self._read_sbs_messages()
 
             now = time.time()
 
@@ -532,7 +764,7 @@ class ADSBDecoderManager(QObject):
         self._thread.finished.connect(self._on_thread_finished)
 
     def _on_decoder_stopped(self) -> None:
-        """Handle decoder signaling stopped — stop the thread."""
+        """Handle decoder signaling stopped -- stop the thread."""
         self.decoder_stopped.emit()
         if self._thread is not None and self._thread.isRunning():
             self._thread.quit()

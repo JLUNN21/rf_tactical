@@ -247,7 +247,7 @@ class CoTSenderManager(QObject):
         self._thread.finished.connect(self._on_thread_finished)
 
     def _on_sender_stopped(self) -> None:
-        """Handle sender stop — stop the thread."""
+        """Handle sender stop -- stop the thread."""
         self.sender_stopped.emit()
         if self._thread is not None and self._thread.isRunning():
             self._thread.quit()

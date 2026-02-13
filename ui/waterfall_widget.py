@@ -14,8 +14,8 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 
 pg.setConfigOption("imageAxisOrder", "row-major")
-pg.setConfigOption("background", "#0A0A0A")
-pg.setConfigOption("foreground", "#00CC33")
+pg.setConfigOption("background", "#0A0A0F")
+pg.setConfigOption("foreground", "#BB86FC")
 pg.setConfigOptions(antialias=True)
 
 
@@ -32,17 +32,29 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
 
     COLORMAP_POSITIONS = [0.0, 0.15, 0.35, 0.55, 0.75, 0.9, 1.0]
     COLORMAP_COLORS = [
-        (0, 0, 0),          # black   #000000
-        (0, 0, 80),         # navy    #000050
-        (0, 120, 48),       # dk grn  #007830
-        (0, 204, 51),       # green   #00CC33
-        (204, 204, 0),      # yellow  #CCCC00
-        (255, 0, 0),        # red     #FF0000
-        (255, 255, 255),    # white   #FFFFFF
+        (10, 10, 15),       # near-black  #0A0A0F
+        (45, 27, 78),       # deep purple #2D1B4E
+        (108, 52, 131),     # dk purple   #6C3483
+        (187, 134, 252),    # purple      #BB86FC
+        (212, 160, 255),    # lt purple   #D4A0FF
+        (255, 140, 0),      # amber       #FF8C00
+        (255, 255, 255),    # white       #FFFFFF
     ]
 
     PRESET_COLORMAPS = {
-        "TACTICAL GREEN": (COLORMAP_POSITIONS, COLORMAP_COLORS),
+        "TACTICAL PURPLE": (COLORMAP_POSITIONS, COLORMAP_COLORS),
+        "TACTICAL GREEN": (
+            [0.0, 0.15, 0.35, 0.55, 0.75, 0.9, 1.0],
+            [
+                (0, 0, 0),
+                (0, 0, 80),
+                (0, 120, 48),
+                (0, 204, 51),
+                (204, 204, 0),
+                (255, 0, 0),
+                (255, 255, 255),
+            ],
+        ),
         "IRONBOW": (
             [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
             [
@@ -100,9 +112,9 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
 
         self._freq_axis = self._compute_freq_axis()
 
-        self._db_min = -100.0
+        self._db_min = -120.0
         self._db_max = 0.0
-        self._waterfall_min_db = -80.0
+        self._waterfall_min_db = -120.0
 
         self._colormap = self._build_colormap()
         self._lut = self._colormap.getLookupTable(
@@ -133,7 +145,7 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
         return [(float(v), f"{v:.{decimals}f}") for v in values]
 
     def _apply_grid_and_ticks(self):
-        grid_pen = pg.mkPen("#1A3D1A", width=1, style=Qt.DotLine)
+        grid_pen = pg.mkPen("#2D1B4E", width=1, style=Qt.DotLine)
         plots = [self._spectrum_plot]
         if hasattr(self, "_waterfall_plot"):
             plots.append(self._waterfall_plot)
@@ -141,8 +153,8 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
             plot.showGrid(x=True, y=True, alpha=1.0)
             for axis_key in ("bottom", "left"):
                 axis = plot.getAxis(axis_key)
-                axis.setTextPen("#00CC33")
-                axis.setPen("#00CC33")
+                axis.setTextPen("#BB86FC")
+                axis.setPen("#BB86FC")
                 axis.setStyle(tickFont=QFont("Source Code Pro", 9))
                 axis.gridPen = grid_pen
                 axis.setGrid(128)
@@ -163,7 +175,7 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
         self._waterfall_plot.getAxis("bottom").setTicks([x_ticks])
         self._waterfall_plot.getAxis("left").setTicks([time_ticks])
 
-    def _build_colormap(self, preset: str = "TACTICAL GREEN") -> ColorMap:
+    def _build_colormap(self, preset: str = "TACTICAL PURPLE") -> ColorMap:
         """Build a colormap from presets."""
         positions, colors = self.PRESET_COLORMAPS.get(
             preset, (self.COLORMAP_POSITIONS, self.COLORMAP_COLORS)
@@ -187,12 +199,61 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
         self._spectrum_plot.setMenuEnabled(False)
         self._spectrum_plot.hideButtons()
 
-        spectrum_pen = pg.mkPen(color="#00FF41", width=1)
+        spectrum_pen = pg.mkPen(color="#D4A0FF", width=1)
         self._spectrum_curve = self._spectrum_plot.plot(
             self._freq_axis,
             self._current_spectrum,
             pen=spectrum_pen,
         )
+
+        # Peak hold max trace (yellow dashed)
+        self._peak_hold_max_curve = self._spectrum_plot.plot(
+            self._freq_axis,
+            np.full(self._fft_size, -200.0),
+            pen=pg.mkPen("#FFB000", width=1, style=Qt.DashLine),
+        )
+        self._peak_hold_max_curve.setVisible(False)
+        self._show_peak_hold_max = False
+
+        # Average trace (cyan solid thin)
+        self._average_curve = self._spectrum_plot.plot(
+            self._freq_axis,
+            np.full(self._fft_size, -120.0),
+            pen=pg.mkPen("#80E0FF", width=1),
+        )
+        self._average_curve.setVisible(False)
+        self._show_average = False
+
+        # Min hold trace (dim purple dotted)
+        self._min_hold_curve = self._spectrum_plot.plot(
+            self._freq_axis,
+            np.full(self._fft_size, 200.0),
+            pen=pg.mkPen("#6C3483", width=1, style=Qt.DotLine),
+        )
+        self._min_hold_curve.setVisible(False)
+        self._show_min_hold = False
+
+        # Baseline trace (green dashed)
+        self._baseline_curve = self._spectrum_plot.plot(
+            self._freq_axis,
+            np.full(self._fft_size, -120.0),
+            pen=pg.mkPen("#00CC33", width=1, style=Qt.DashDotLine),
+        )
+        self._baseline_curve.setVisible(False)
+        self._show_baseline = False
+
+        # Anomaly fill (red semi-transparent region above baseline)
+        self._anomaly_fill = pg.FillBetweenItem(
+            self._baseline_curve, self._spectrum_curve,
+            brush=pg.mkBrush(255, 0, 0, 40),
+        )
+        self._spectrum_plot.addItem(self._anomaly_fill)
+        self._anomaly_fill.setVisible(False)
+        self._show_anomalies = False
+
+        # Frequency bookmark markers
+        self._bookmark_lines = []
+        self._bookmarks = []
 
         self._apply_grid_and_ticks()
 
@@ -244,13 +305,13 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
         """Build FPS overlay label."""
         self._fps_label = QLabel("FPS: --", self)
         self._fps_label.setFont(QFont("Source Code Pro", 9, QFont.Bold))
-        self._fps_label.setStyleSheet("color: #00CC33; background: transparent;")
+        self._fps_label.setStyleSheet("color: #BB86FC; background: transparent;")
         self._fps_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
         self._fps_label.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._fps_label.raise_()
 
     def _normalize_db(self, data: np.ndarray) -> np.ndarray:
-        """Normalize dB values to 0.0–1.0 range for colormap lookup."""
+        """Normalize dB values to 0.0-1.0 range for colormap lookup."""
         return np.clip(
             (data - self._db_min) / (self._db_max - self._db_min), 0.0, 1.0
         )
@@ -410,6 +471,144 @@ class TacticalWaterfall(pg.GraphicsLayoutWidget):
             start=0.0, stop=1.0, nPts=256, alpha=False
         )
         self._image_item.setLookupTable(self._lut)
+
+    # ── Trace Overlay Controls ──────────────────────────────────
+
+    def update_overlay_traces(self, peak_hold_max=None, average=None, min_hold=None, baseline=None):
+        """Update overlay trace data from SpectrumAnalyzer.
+
+        Args:
+            peak_hold_max: Peak hold max array (dB), or None to skip.
+            average: Running average array (dB), or None to skip.
+            min_hold: Min hold array (dB), or None to skip.
+            baseline: Baseline array (dB), or None to skip.
+        """
+        if peak_hold_max is not None and self._show_peak_hold_max:
+            data = np.asarray(peak_hold_max, dtype=np.float64)
+            if len(data) != self._fft_size:
+                data = np.interp(
+                    np.linspace(0, 1, self._fft_size),
+                    np.linspace(0, 1, len(data)), data)
+            self._peak_hold_max_curve.setData(self._freq_axis, data)
+
+        if average is not None and self._show_average:
+            data = np.asarray(average, dtype=np.float64)
+            if len(data) != self._fft_size:
+                data = np.interp(
+                    np.linspace(0, 1, self._fft_size),
+                    np.linspace(0, 1, len(data)), data)
+            self._average_curve.setData(self._freq_axis, data)
+
+        if min_hold is not None and self._show_min_hold:
+            data = np.asarray(min_hold, dtype=np.float64)
+            if len(data) != self._fft_size:
+                data = np.interp(
+                    np.linspace(0, 1, self._fft_size),
+                    np.linspace(0, 1, len(data)), data)
+            self._min_hold_curve.setData(self._freq_axis, data)
+
+        if baseline is not None and self._show_baseline:
+            data = np.asarray(baseline, dtype=np.float64)
+            if len(data) != self._fft_size:
+                data = np.interp(
+                    np.linspace(0, 1, self._fft_size),
+                    np.linspace(0, 1, len(data)), data)
+            self._baseline_curve.setData(self._freq_axis, data)
+
+    def set_show_peak_hold_max(self, visible: bool):
+        """Toggle peak hold max trace visibility."""
+        self._show_peak_hold_max = visible
+        self._peak_hold_max_curve.setVisible(visible)
+
+    def set_show_average(self, visible: bool):
+        """Toggle average trace visibility."""
+        self._show_average = visible
+        self._average_curve.setVisible(visible)
+
+    def set_show_min_hold(self, visible: bool):
+        """Toggle min hold trace visibility."""
+        self._show_min_hold = visible
+        self._min_hold_curve.setVisible(visible)
+
+    def set_show_baseline(self, visible: bool):
+        """Toggle baseline trace visibility."""
+        self._show_baseline = visible
+        self._baseline_curve.setVisible(visible)
+
+    def set_show_anomalies(self, visible: bool):
+        """Toggle anomaly fill visibility."""
+        self._show_anomalies = visible
+        self._anomaly_fill.setVisible(visible and self._show_baseline)
+
+    # ── Frequency Bookmarks ─────────────────────────────────────
+
+    def add_bookmark(self, freq_hz: float, label: str = ""):
+        """Add a frequency bookmark marker.
+
+        Args:
+            freq_hz: Frequency in Hz to bookmark.
+            label: Optional label for the bookmark.
+        """
+        freq_mhz = freq_hz / 1e6
+        self._bookmarks.append({"freq_hz": freq_hz, "label": label})
+
+        line = pg.InfiniteLine(
+            pos=freq_mhz,
+            angle=90,
+            pen=pg.mkPen("#FFB000", width=1, style=Qt.DashLine),
+            label=label or f"{freq_mhz:.3f}",
+            labelOpts={"color": "#FFB000", "position": 0.95},
+        )
+        self._spectrum_plot.addItem(line)
+        self._bookmark_lines.append(line)
+
+        # Also add to waterfall plot
+        wf_line = pg.InfiniteLine(
+            pos=freq_mhz,
+            angle=90,
+            pen=pg.mkPen("#FFB000", width=1, style=Qt.DashLine),
+        )
+        self._waterfall_plot.addItem(wf_line)
+        self._bookmark_lines.append(wf_line)
+
+    def remove_bookmark(self, freq_hz: float):
+        """Remove a frequency bookmark by frequency.
+
+        Args:
+            freq_hz: Frequency in Hz to remove.
+        """
+        freq_mhz = freq_hz / 1e6
+        self._bookmarks = [b for b in self._bookmarks if abs(b["freq_hz"] - freq_hz) > 1000]
+
+        lines_to_remove = []
+        for line in self._bookmark_lines:
+            if abs(line.value() - freq_mhz) < 0.001:
+                lines_to_remove.append(line)
+
+        for line in lines_to_remove:
+            if line in self._spectrum_plot.items:
+                self._spectrum_plot.removeItem(line)
+            if line in self._waterfall_plot.items:
+                self._waterfall_plot.removeItem(line)
+            self._bookmark_lines.remove(line)
+
+    def clear_bookmarks(self):
+        """Remove all frequency bookmarks."""
+        for line in self._bookmark_lines:
+            try:
+                self._spectrum_plot.removeItem(line)
+            except Exception:
+                pass
+            try:
+                self._waterfall_plot.removeItem(line)
+            except Exception:
+                pass
+        self._bookmark_lines.clear()
+        self._bookmarks.clear()
+
+    def get_bookmarks(self):
+        """Return list of bookmark dicts with freq_hz and label."""
+        return list(self._bookmarks)
 
     def resizeEvent(self, event):
         """Keep overlay anchored to bottom-right."""

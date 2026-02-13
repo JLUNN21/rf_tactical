@@ -22,7 +22,7 @@ class DetailDialog(QDialog):
 
         header = QLabel(title)
         header.setFont(QFont("DejaVu Sans Mono", 13, QFont.Bold))
-        header.setStyleSheet("color: #00FF41; background: transparent;")
+        header.setStyleSheet("color: #D4A0FF; background: transparent;")
         header.setAlignment(Qt.AlignCenter)
         header.setMinimumHeight(28)
         layout.addWidget(header)
@@ -30,7 +30,7 @@ class DetailDialog(QDialog):
         for key, value in details.items():
             line = QLabel(f"{key}: {value}")
             line.setFont(QFont("DejaVu Sans Mono", 10))
-            line.setStyleSheet("color: #00CC33; background: transparent;")
+            line.setStyleSheet("color: #BB86FC; background: transparent;")
             line.setMinimumHeight(24)
             layout.addWidget(line)
 

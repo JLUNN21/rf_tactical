@@ -1,0 +1,232 @@
+# RF Device Presets Database
+# Quick-select common devices with known frequencies
+
+presets:
+  # Garage Door Openers
+  - name: "Overhead Door Remote (O1BT-P)"
+    category: "Garage Door"
+    frequency_mhz: 390.0
+    bandwidth_mhz: 1.0
+    modulation: "OOK/ASK"
+    description: "Overhead Door Corporation garage remote, FCC ID: B8Q1BTX"
+    notes: "Short burst packets, rolling code security"
+    
+  - name: "Chamberlain/LiftMaster (Purple Learn)"
+    category: "Garage Door"
+    frequency_mhz: 315.0
+    bandwidth_mhz: 1.0
+    modulation: "OOK"
+    description: "Chamberlain/LiftMaster Security+ remotes"
+    notes: "Common in North America, 315 MHz ISM band"
+    
+  - name: "Genie Intellicode"
+    category: "Garage Door"
+    frequency_mhz: 315.0
+    bandwidth_mhz: 1.0
+    modulation: "OOK"
+    description: "Genie garage door openers with Intellicode"
+    notes: "315 MHz, rolling code"
+    
+  - name: "Generic 433 MHz Garage Remote"
+    category: "Garage Door"
+    frequency_mhz: 433.92
+    bandwidth_mhz: 1.0
+    modulation: "OOK"
+    description: "Generic 433.92 MHz garage door remotes (Europe/Asia)"
+    notes: "Common in Europe, fixed or rolling code"
+
+  # Car Key Fobs
+  - name: "Car Key Fob (315 MHz)"
+    category: "Automotive"
+    frequency_mhz: 315.0
+    bandwidth_mhz: 1.0
+    modulation: "ASK/FSK"
+    description: "North American car key fobs"
+    notes: "Lock/unlock, trunk, panic button"
+    
+  - name: "Car Key Fob (433 MHz)"
+    category: "Automotive"
+    frequency_mhz: 433.92
+    bandwidth_mhz: 1.0
+    modulation: "ASK/FSK"
+    description: "European/Asian car key fobs"
+    notes: "Lock/unlock, trunk, panic button"
+
+  # TPMS (Tire Pressure Monitoring)
+  - name: "TPMS (315 MHz)"
+    category: "Automotive"
+    frequency_mhz: 315.0
+    bandwidth_mhz: 0.5
+    modulation: "FSK"
+    description: "Tire Pressure Monitoring System (North America)"
+    notes: "Periodic broadcasts every 60 seconds"
+    
+  - name: "TPMS (433 MHz)"
+    category: "Automotive"
+    frequency_mhz: 433.92
+    bandwidth_mhz: 0.5
+    modulation: "FSK"
+    description: "Tire Pressure Monitoring System (Europe)"
+    notes: "Periodic broadcasts every 60 seconds"
+
+  # Weather Stations
+  - name: "Acurite Weather Station"
+    category: "Weather"
+    frequency_mhz: 433.92
+    bandwidth_mhz: 1.0
+    modulation: "OOK"
+    description: "Acurite wireless weather sensors"
+    notes: "Temperature, humidity, wind speed"
+    
+  - name: "Oregon Scientific Weather"
+    category: "Weather"
+    frequency_mhz: 433.92
+    bandwidth_mhz: 1.0
+    modulation: "OOK"
+    description: "Oregon Scientific weather sensors"
+    notes: "Various protocols (v1, v2, v3)"
+
+  # Doorbells
+  - name: "Wireless Doorbell (433 MHz)"
+    category: "Home"
+    frequency_mhz: 433.92
+    bandwidth_mhz: 1.0
+    modulation: "OOK"
+    description: "Generic wireless doorbell"
+    notes: "Simple button press signal"
+    
+  - name: "Ring Doorbell (2.4 GHz)"
+    category: "Home"
+    frequency_mhz: 2437.0
+    bandwidth_mhz: 20.0
+    modulation: "WiFi"
+    description: "Ring video doorbell (WiFi)"
+    notes: "Uses WiFi, not simple RF"
+
+  # Security Systems
+  - name: "SimpliSafe Sensors"
+    category: "Security"
+    frequency_mhz: 433.92
+    bandwidth_mhz: 1.0
+    modulation: "FSK"
+    description: "SimpliSafe home security sensors"
+    notes: "Door/window sensors, motion detectors"
+    
+  - name: "ADT Security Sensors"
+    category: "Security"
+    frequency_mhz: 345.0
+    bandwidth_mhz: 1.0
+    modulation: "OOK"
+    description: "ADT wireless security sensors"
+    notes: "Proprietary protocol"
+
+  # Baby Monitors
+  - name: "Baby Monitor (900 MHz)"
+    category: "Home"
+    frequency_mhz: 900.0
+    bandwidth_mhz: 2.0
+    modulation: "FM"
+    description: "Analog baby monitor"
+    notes: "Continuous audio transmission"
+    
+  - name: "Baby Monitor (2.4 GHz)"
+    category: "Home"
+    frequency_mhz: 2437.0
+    bandwidth_mhz: 20.0
+    modulation: "FHSS"
+    description: "Digital baby monitor"
+    notes: "Frequency hopping, encrypted"
+
+  # Drones
+  - name: "DJI Drone (2.4 GHz)"
+    category: "Drone"
+    frequency_mhz: 2437.0
+    bandwidth_mhz: 20.0
+    modulation: "WiFi/Proprietary"
+    description: "DJI consumer drones"
+    notes: "Control and video downlink"
+    
+  - name: "DJI Drone (5.8 GHz)"
+    category: "Drone"
+    frequency_mhz: 5800.0
+    bandwidth_mhz: 40.0
+    modulation: "WiFi/Proprietary"
+    description: "DJI FPV video downlink"
+    notes: "High-bandwidth video"
+
+  # LoRa/Meshtastic
+  - name: "Meshtastic (915 MHz)"
+    category: "IoT"
+    frequency_mhz: 915.0
+    bandwidth_mhz: 1.0
+    modulation: "LoRa"
+    description: "Meshtastic mesh network (North America)"
+    notes: "Long-range, low-power mesh"
+    
+  - name: "Meshtastic (433 MHz)"
+    category: "IoT"
+    frequency_mhz: 433.92
+    bandwidth_mhz: 1.0
+    modulation: "LoRa"
+    description: "Meshtastic mesh network (Europe)"
+    notes: "Long-range, low-power mesh"
+
+  # Pagers
+  - name: "POCSAG Pager"
+    category: "Pager"
+    frequency_mhz: 929.0
+    bandwidth_mhz: 0.025
+    modulation: "FSK"
+    description: "POCSAG paging system"
+    notes: "Still used by hospitals, fire departments"
+    
+  - name: "FLEX Pager"
+    category: "Pager"
+    frequency_mhz: 931.0
+    bandwidth_mhz: 0.025
+    modulation: "FSK"
+    description: "FLEX paging system"
+    notes: "Higher capacity than POCSAG"
+
+  # Aircraft
+  - name: "ADS-B (1090 MHz)"
+    category: "Aviation"
+    frequency_mhz: 1090.0
+    bandwidth_mhz: 2.0
+    modulation: "PPM"
+    description: "Aircraft ADS-B transponders"
+    notes: "Position, altitude, velocity, callsign"
+    
+  - name: "ACARS (131 MHz)"
+    category: "Aviation"
+    frequency_mhz: 131.55
+    bandwidth_mhz: 0.025
+    modulation: "AM"
+    description: "Aircraft Communications Addressing and Reporting System"
+    notes: "Text messages between aircraft and ground"
+
+  # Marine
+  - name: "AIS (162 MHz)"
+    category: "Marine"
+    frequency_mhz: 162.0
+    bandwidth_mhz: 0.025
+    modulation: "GMSK"
+    description: "Automatic Identification System (ships)"
+    notes: "Position, course, speed, vessel info"
+
+  # Utilities
+  - name: "Smart Meter (900 MHz)"
+    category: "Utility"
+    frequency_mhz: 915.0
+    bandwidth_mhz: 1.0
+    modulation: "FSK"
+    description: "Electric/gas smart meters"
+    notes: "Periodic usage reports"
+    
+  - name: "Smart Meter (2.4 GHz)"
+    category: "Utility"
+    frequency_mhz: 2437.0
+    bandwidth_mhz: 20.0
+    modulation: "ZigBee"
+    description: "Smart home energy monitors"
+    notes: "ZigBee protocol"

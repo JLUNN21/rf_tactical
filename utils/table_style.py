@@ -30,20 +30,20 @@ class TableStyler:
         table_widget.setStyleSheet(
             """
             QTableView {
-                gridline-color: #1A3D1A;
-                background-color: #0A0A0A;
-                color: #00CC33;
-                border: 1px solid #2A2A2A;
+                gridline-color: #2D1B4E;
+                background-color: #0A0A0F;
+                color: #BB86FC;
+                border: 1px solid #2A2A3E;
             }
             QTableView::item:selected {
-                background-color: #1A3D1A;
-                color: #00FF41;
+                background-color: #2D1B4E;
+                color: #D4A0FF;
             }
             QHeaderView::section {
-                background-color: #121212;
-                color: #00CC33;
+                background-color: #12121A;
+                color: #BB86FC;
                 padding: 8px;
-                border: 1px solid #2A2A2A;
+                border: 1px solid #2A2A3E;
                 font-weight: bold;
             }
             """

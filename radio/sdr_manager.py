@@ -10,7 +10,12 @@ from pathlib import Path
 
 try:
     import SoapySDR
-    SDR_AVAILABLE = True
+    # Verify SoapySDR is a real module, not an empty namespace package
+    if hasattr(SoapySDR, 'Device') and hasattr(SoapySDR, 'getAPIVersion'):
+        SDR_AVAILABLE = True
+    else:
+        _sdr_import_note = "SoapySDR imported but missing Device/getAPIVersion (stub package?)"
+        SDR_AVAILABLE = False
 except Exception:
     SoapySDR = None
     SDR_AVAILABLE = False
@@ -39,7 +44,7 @@ def _verify_soapy_environment():
         # Check if path exists
         plugin_dir = Path(plugin_path)
         if plugin_dir.exists():
-            _logger.info("✓ Plugin directory exists")
+            _logger.info("[OK] Plugin directory exists")
             
             # List modules in directory
             dll_modules = list(plugin_dir.glob("*.dll"))
@@ -53,14 +58,14 @@ def _verify_soapy_environment():
             # Check specifically for HackRF module
             hackrf_modules = [m for m in all_modules if 'hackrf' in m.name.lower()]
             if hackrf_modules:
-                _logger.info("✓ HackRF module found: %s", hackrf_modules[0].name)
+                _logger.info("[OK] HackRF module found: %s", hackrf_modules[0].name)
             else:
-                _logger.warning("✗ No HackRF module found in plugin directory!")
+                _logger.warning("[X] No HackRF module found in plugin directory!")
                 _logger.warning("Available modules: %s", [m.name for m in all_modules])
                 _logger.warning("You may need to install SoapyHackRF:")
                 _logger.warning("  conda install -c conda-forge soapysdr-module-hackrf")
         else:
-            _logger.error("✗ Plugin directory does NOT exist: %s", plugin_path)
+            _logger.error("[X] Plugin directory does NOT exist: %s", plugin_path)
             _logger.error("Check that radioconda is installed correctly")
     else:
         _logger.warning("SOAPY_SDR_PLUGIN_PATH is NOT set!")
@@ -78,9 +83,9 @@ def _verify_soapy_environment():
             
             # Check for enumerate function
             if hasattr(SoapySDR.Device, 'enumerate'):
-                _logger.info("✓ SoapySDR.Device.enumerate is available")
+                _logger.info("[OK] SoapySDR.Device.enumerate is available")
             else:
-                _logger.error("✗ SoapySDR.Device.enumerate NOT available!")
+                _logger.error("[X] SoapySDR.Device.enumerate NOT available!")
         except Exception as e:
             _logger.error("Error checking SoapySDR module: %s", e)
     
@@ -100,10 +105,10 @@ class SDRManager(QObject):
     bridge data back to the main thread.
 
     Signals:
-        new_waterfall_row(object): Forwarded from SDRWorker — float32 dB array.
-        error_occurred(str): Forwarded from SDRWorker — error messages.
-        device_connected(str): Forwarded from SDRWorker — connection info.
-        device_disconnected(): Forwarded from SDRWorker — device closed.
+        new_waterfall_row(object): Forwarded from SDRWorker -- float32 dB array.
+        error_occurred(str): Forwarded from SDRWorker -- error messages.
+        device_connected(str): Forwarded from SDRWorker -- connection info.
+        device_disconnected(): Forwarded from SDRWorker -- device closed.
         capture_started(): Emitted when capture begins.
         capture_stopped(): Emitted when capture ends and thread is idle.
 
@@ -118,6 +123,9 @@ class SDRManager(QObject):
     """
 
     new_waterfall_row = pyqtSignal(object)
+    spectrum_stats_updated = pyqtSignal(object)    # SpectrumStats from analyzer
+    signal_event_detected = pyqtSignal(object)     # SignalEvent from V2 detector
+    signal_event_closed = pyqtSignal(object)       # Closed SignalEvent with features
     error_occurred = pyqtSignal(str)
     device_connected = pyqtSignal(str)
     device_disconnected = pyqtSignal()
@@ -158,7 +166,9 @@ class SDRManager(QObject):
         self._player = None
         self._player_thread = None
         self._is_connected = False
-        self._set_connected(self._probe_device())
+        # Don't probe on init - just check if SoapySDR is available
+        # Actual device probe happens when START is pressed
+        self._set_connected(SDR_AVAILABLE)
 
     def _setup_worker(self):
         """Create the worker and thread, wire up signals."""
@@ -179,6 +189,9 @@ class SDRManager(QObject):
         self._worker.moveToThread(self._thread)
 
         self._worker.new_waterfall_row.connect(self.new_waterfall_row)
+        self._worker.spectrum_stats_updated.connect(self.spectrum_stats_updated)
+        self._worker.signal_event_detected.connect(self.signal_event_detected)
+        self._worker.signal_event_closed.connect(self.signal_event_closed)
         self._worker.error_occurred.connect(self.error_occurred)
         self._worker.device_connected.connect(self.device_connected)
         self._worker.device_disconnected.connect(self._on_device_disconnected)
@@ -192,7 +205,7 @@ class SDRManager(QObject):
         self._thread.finished.connect(self._on_thread_finished)
 
     def _on_device_disconnected(self):
-        """Handle worker signaling device closed — stop the thread."""
+        """Handle worker signaling device closed -- stop the thread."""
         # Don't set connected=False here - device is still available
         # Only the capture session ended
         self.device_disconnected.emit()
@@ -237,15 +250,8 @@ class SDRManager(QObject):
             logging.warning("Cannot start SDR - SoapySDR not available")
             return
 
-        # Re-probe device before starting (in case it was disconnected)
-        if self._probe_device():
-            self._set_connected(True)
-        else:
-            self._set_connected(False)
-            self.connection_status.emit("SDR: DISCONNECTED", 0.0)
-            logging.warning("Cannot start SDR - No HackRF detected")
-            return
-
+        # Don't probe here - let the worker handle device opening
+        # The worker will emit proper connection status signals
         self._setup_worker()
         self.connection_status.emit("SDR: CONNECTING...", self._sample_rate)
         self._thread.start()
@@ -254,13 +260,13 @@ class SDRManager(QObject):
 
     @pyqtSlot()
     def stop(self):
-        """Stop SDR capture and shut down the thread."""
+        """Stop SDR capture (non-blocking -- thread cleans up via signals)."""
         if self._worker is not None:
             self._worker.stop_capture()
 
         if self._thread is not None and self._thread.isRunning():
             self._thread.quit()
-            self._thread.wait(5000)
+            # Don't block GUI thread -- thread cleanup happens via _on_thread_finished
         self.running_changed.emit(False)
 
     def play_recording(self, iq_filepath, metadata):
@@ -336,6 +342,20 @@ class SDRManager(QObject):
         """Mark a signal event during recording."""
         if self._worker is not None:
             self._worker.mark_signal(freq_hz, power_dbm, duration_sec)
+    
+    def transmit_signal(self, iq_samples, center_freq, sample_rate=2e6, tx_gain=30):
+        """Transmit IQ samples via HackRF TX.
+        
+        Args:
+            iq_samples: Complex IQ samples to transmit
+            center_freq: TX frequency in Hz
+            sample_rate: TX sample rate in Hz (default 2 MHz)
+            tx_gain: TX VGA gain 0-47 dB (default 30 dB)
+        """
+        if self._worker is not None:
+            self._worker.transmit_signal(iq_samples, center_freq, sample_rate, tx_gain)
+        else:
+            logging.error("Cannot transmit - worker not available")
 
     def _on_playback_finished(self):
         self.playback_finished.emit()
@@ -383,12 +403,12 @@ class SDRManager(QObject):
         self.connection_changed.emit(connected)
 
     def _on_connection_status(self, status: str, _sample_rate: float) -> None:
-        if status in {"ACTIVE", "IDLE"}:
+        # Map status strings to connection state
+        if "ACTIVE" in status or "IDLE" in status or "CONNECTING" in status:
             self._set_connected(True)
-        elif status == "ERROR":
-            # Only set disconnected on ERROR, not on normal DISCONNECTED
+        elif "ERROR" in status or "NOT AVAILABLE" in status:
             self._set_connected(False)
-        # Don't change connection state on DISCONNECTED - device is still available
+        # Don't change connection state on normal DISCONNECTED - device is still available
 
     def _probe_device(self) -> bool:
         """Probe for available SDR devices with detailed logging."""
@@ -433,7 +453,7 @@ class SDRManager(QObject):
                 if 'hackrf' in result_str:
                     hackrf_found = True
                     hackrf_result = result
-                    logging.info("✓ Found HackRF device: %s", result)
+                    logging.info("[OK] Found HackRF device: %s", result)
                     break
             
             if not hackrf_found:
@@ -443,7 +463,7 @@ class SDRManager(QObject):
                 return False
             
             # Device found via enumeration - that's enough for probe
-            logging.info("✓ HackRF device detected via enumeration")
+            logging.info("[OK] HackRF device detected via enumeration")
             logging.info("  Device will be opened when START is pressed")
             return True
             

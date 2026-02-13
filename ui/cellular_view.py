@@ -85,9 +85,9 @@ class CellularBandTableModel(QAbstractTableModel):
         elif role == Qt.TextAlignmentRole:
             return Qt.AlignCenter
         elif role == Qt.ForegroundRole:
-            return QColor("#00FF41")
+            return QColor("#D4A0FF")
         elif role == Qt.BackgroundRole:
-            return QColor("#0A0A0A")
+            return QColor("#0A0A0F")
         return QVariant()
 
     def _get_display_value(self, band: dict, col: int) -> str:
@@ -239,7 +239,7 @@ class CellularView(QWidget):
         layout.addWidget(table_view, 2)
 
         self._status_label.setFont(QFont("DejaVu Sans Mono", 9))
-        self._status_label.setStyleSheet("color: #006B1F; background: transparent; border: none;")
+        self._status_label.setStyleSheet("color: #6C3483; background: transparent; border: none;")
         self._status_label.setAlignment(Qt.AlignCenter)
         self._status_label.setFixedHeight(20)
         layout.addWidget(self._status_label)
@@ -251,7 +251,7 @@ class CellularView(QWidget):
         """Update table with detected bands."""
         self._model.update_bands(bands)
         self._status_label.setText(f"BANDS DETECTED: {len(bands)}")
-        self._status_label.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        self._status_label.setStyleSheet("color: #D4A0FF; background: transparent; border: none;")
         strongest = max((band.get("power_dbm") for band in bands if band.get("power_dbm") is not None), default=None)
         strongest_text = "N/A" if strongest is None else f"{strongest:.1f} dBm"
         if self._summary_label is not None:
@@ -264,7 +264,7 @@ class CellularView(QWidget):
     def _refresh_requested(self) -> None:
         self._model.clear()
         self._status_label.setText("REFRESHING CELLULAR...")
-        self._status_label.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        self._status_label.setStyleSheet("color: #D4A0FF; background: transparent; border: none;")
 
     @pyqtSlot(str)
     def set_status(self, status: str) -> None:
@@ -286,7 +286,7 @@ class CellularView(QWidget):
         """Clear detected bands and reset status."""
         self._model.clear()
         self._status_label.setText("AWAITING CELLULAR SWEEP")
-        self._status_label.setStyleSheet("color: #006B1F; background: transparent; border: none;")
+        self._status_label.setStyleSheet("color: #6C3483; background: transparent; border: none;")
         if self._summary_label is not None:
             self._summary_label.setText("Towers detected: 0 | Strongest: N/A")
 
